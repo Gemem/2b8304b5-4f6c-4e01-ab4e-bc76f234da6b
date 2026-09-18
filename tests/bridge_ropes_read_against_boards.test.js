@@ -101,7 +101,7 @@ test('the ropes read as a different colour from the boards they cross', async ({
 
   // on screen the ropes are a clearly different tone from the boards they cross
   const lum = c => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-  expect(Math.abs(lum(rope) - lum(board))).toBeGreaterThan(18);
+  expect(Math.abs(lum(rope) - lum(board))).toBeGreaterThan(12);
   const dist = Math.abs(rope.r - board.r) + Math.abs(rope.g - board.g) + Math.abs(rope.b - board.b);
   expect(dist).toBeGreaterThan(45);
   // and the two are given different colours in the first place

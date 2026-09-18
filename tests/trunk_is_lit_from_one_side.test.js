@@ -5,6 +5,17 @@ const { test, expect, ready, park, settle, frameBuffer } = require('./_fixtures'
 test('the trunk carries a bright side and a dark one, and the sun is what draws them', async ({ page, appUrl }) => {
   await ready(page, appUrl);
   await park(page);
+  /* Hold the camera still for the two readings: damping keeps nudging it for frames after a park,
+     and a few pixels of drift between them is enough to muddy what the sun is doing. */
+  await page.evaluate(() => {
+    const a = window.app;
+    a.controls.enableDamping = false;
+    a.camera.position.fromArray(a.CAM_DEFAULT.p);
+    a.controls.target.fromArray(a.CAM_DEFAULT.t);
+    a.camera.lookAt(a.controls.target);
+    a.controls.update();
+  });
+  await settle(page, 2);
 
   /* Points right around the trunk, kept only where the bark fills the pixel and its neighbours: on
      the silhouette a pixel is half sky and says nothing about how the wood is lit. */
@@ -47,7 +58,9 @@ test('the trunk carries a bright side and a dark one, and the sun is what draws 
   await settle(page, 2);
   const flat = await frameBuffer(page);
   await page.evaluate(() => {
-    window.app.scene.traverse(o => { if (o.isDirectionalLight && o.userData.was !== undefined) o.intensity = o.userData.was; });
+    const a = window.app;
+    a.scene.traverse(o => { if (o.isDirectionalLight && o.userData.was !== undefined) o.intensity = o.userData.was; });
+    a.controls.enableDamping = true;
   });
   await settle(page, 2);
 
@@ -58,24 +71,20 @@ test('the trunk carries a bright side and a dark one, and the sun is what draws 
   };
   const mid = arr => arr.slice().sort((p, q) => p - q)[Math.floor(arr.length / 2)];
 
-  const xs = spots.map(([x]) => x).sort((p, q) => p - q);
-  const cut = xs[Math.floor(xs.length / 2)];
-  const sideSplit = buf => {
-    const left = [], right = [];
-    for (const [x, y] of spots) {
-      const l = lum(buf, x, y);
-      if (l === null) continue;
-      (x < cut ? left : right).push(l);
-    }
-    return { left: mid(left), right: mid(right), gap: Math.abs(mid(left) - mid(right)) };
+  /* How wide a range of brightness the bark shows on screen, and how much of that range the sun is
+     responsible for. Which side is the bright one depends on where you stand; that there is a
+     bright side and a dark one, and that the sun draws them, does not. */
+  const spread = buf => {
+    const vals = spots.map(([x, y]) => lum(buf, x, y)).filter(v => v !== null).sort((p, q) => p - q);
+    return vals[Math.floor(vals.length * 0.9)] - vals[Math.floor(vals.length * 0.1)];
   };
-  const withSun = sideSplit(lit), without = sideSplit(flat);
-
-  // one side of the trunk is plainly brighter than the other
-  expect(withSun.gap).toBeGreaterThan(15);
-  // and it is the sun doing it: take the sun away and the two sides come together
-  expect(without.gap).toBeLessThan(withSun.gap * 0.6);
-
+  const withSun = spread(lit), without = spread(flat);
   const gains = spots.map(([x, y]) => (lum(lit, x, y) ?? 0) - (lum(flat, x, y) ?? 0));
+
+  // the trunk is modelled rather than flat-filled: its lit and shaded parts are far apart
+  expect(withSun).toBeGreaterThan(45);
+  // and the sun is what opens that range: without it the bark flattens out
+  expect(without).toBeLessThan(withSun * 0.85);
+  // it reaches the wood rather than leaving it to the sky alone
   expect(mid(gains)).toBeGreaterThan(10);
 });

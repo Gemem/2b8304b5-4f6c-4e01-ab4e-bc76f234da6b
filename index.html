@@ -476,20 +476,77 @@ halo.position.copy(sunSprite.position);
 halo.scale.setScalar(64);
 scene.add(halo);
 
-const ground = new THREE.Mesh(new THREE.CircleGeometry(130, 48), new THREE.MeshStandardMaterial({ color: 0x6f9c52, roughness: 1 }));
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
-
-for (let i = 0; i < 9; i++) { // soft grass patches
-  const r = 1.4 + rnd() * 2.6;
-  const p = new THREE.Mesh(new THREE.CircleGeometry(r, 20), new THREE.MeshStandardMaterial({ color: 0x67924b, roughness: 1 }));
-  p.rotation.x = -Math.PI / 2;
-  const a = rnd() * TAU, d = 3 + rnd() * 22;
-  p.position.set(Math.cos(a) * d, 0.03, Math.sin(a) * d);
-  p.receiveShadow = true;
-  scene.add(p);
+/* The designer's ground is not a green disc: it is his forest-floor scan, laid over a shallow
+   mound that falls away toward the tree line. terrainY is the one place the height is decided, so
+   everything that stands on the ground reads it. */
+const GROUND_R = 110;      // far enough that the rim is lost in the haze
+function terrainY(x, z) {
+  const r = Math.hypot(x, z);
+  const fall = Math.min(1, r / 70);
+  const dish = -3.2 * fall * fall;                        // the ground falls away toward the haze
+  const roll = Math.sin(x * 0.055 + 1.3) * Math.cos(z * 0.048 - 0.7) * 0.55
+             + Math.sin(x * 0.021 - 0.4) * 0.35;
+  const root = Math.max(0, 1 - r / 6);                    // and lifts into the root flare
+  return dish + roll * Math.min(1, r / 8) + root * root * 0.55;
 }
+
+const groundTex = {};
+function loadGroundTextures() {
+  const loader = new THREE.TextureLoader();
+  const get = (file, srgb) => {
+    const t = loader.load('assets/textures/' + file);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(GROUND_R / 3.0, GROUND_R / 3.0);   // one tile every three metres across the disc
+    t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  groundTex.map = get('forrest_ground_01_diff_1k.webp', true);
+  groundTex.normalMap = get('forrest_ground_01_nor_gl_1k.webp', false);
+  groundTex.armMap = get('forrest_ground_01_arm_1k.webp', false);
+}
+
+function buildGround() {
+  /* A disc rather than a square: its rim is a circle at one distance all the way round, so it sits
+     in the haze instead of ending in a corner against the sky. */
+  const rings = 48, slices = 96, verts = [], uvs = [], index = [];
+  for (let r = 0; r <= rings; r++) {
+    const rad = GROUND_R * Math.pow(r / rings, 1.6);        // fine near the tree, coarse at the rim
+    for (let k = 0; k <= slices; k++) {
+      const a = k / slices * Math.PI * 2;
+      const x = Math.cos(a) * rad, z = Math.sin(a) * rad;
+      verts.push(x, terrainY(x, z), z);
+      uvs.push(x / GROUND_R * 0.5 + 0.5, z / GROUND_R * 0.5 + 0.5);
+      if (r < rings && k < slices) {
+        const i = r * (slices + 1) + k;
+        index.push(i, i + 1, i + slices + 1, i + 1, i + slices + 2, i + slices + 1);
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(index);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({
+    map: groundTex.map,
+    normalMap: groundTex.normalMap,
+    aoMap: groundTex.armMap,
+    roughnessMap: groundTex.armMap,      // the package's arm map: ao, roughness, metalness in r/g/b
+    roughness: 1,
+    metalness: 0,
+  });
+  /* the ao map reads the second uv set, and a circle's uvs run 0..1 across the disc, so the tiling
+     is carried on the repeat rather than on the uvs */
+  geo.setAttribute('uv1', geo.attributes.uv);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'forest floor';
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+
+let ground = null;
 
 /* --- the one tree everything hangs on ---
    The trunk used to be a noised cylinder with a canopy of icosahedron blobs above it. Both are
@@ -509,51 +566,107 @@ let oakTree = null;
    its own roots and branches, so they go. */
 
 
-// --- bushes, rocks, tufts, mushrooms ---
-for (let i = 0; i < 6; i++) {
-  const a = rnd() * TAU, d = 6 + rnd() * 11;
-  const bush = new THREE.Group();
-  const n = 2 + Math.floor(rnd() * 2);
-  for (let k = 0; k < n; k++) {
-    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5 + rnd() * 0.45, 1), MAT.leaf[Math.floor(rnd() * MAT.leaf.length)]);
-    m.position.set((rnd() - .5) * 1.1, 0.35 + rnd() * 0.25, (rnd() - .5) * 1.1);
-    m.castShadow = true;
-    bush.add(m);
+/* The package's foliage, placed as instances rather than as meshes: fifteen scanned plants, each
+   drawn once per bucket however many times it appears. Every bucket is built twice — the near ring
+   casts shadows, the far one does not and is swapped in by distance, which is the LOD the dev note
+   asks for. */
+const FOLIAGE = [
+  /* Seven of the package's scans, at the density each can afford. The two that stand closest to
+     the path — the ferns and the weeds — keep every leaf the scan came with; the bulkier bushes,
+     stump and rocks are carried at the lighter weight the pack's own LOD gives them, which reads
+     the same at the distance they are planted. */
+  { file: 'fern_02_1k',          size: 2.0, n: 12, r: [4, 15], s: [0.6, 1.2], tilt: 0.14 },
+  { file: 'weed_plant_02_1k',    size: 1.4, n: 8,  r: [4, 16], s: [0.6, 1.3], tilt: 0.16 },
+  { file: 'shrub_02_1k',         size: 2.6, n: 6,  r: [6, 18], s: [0.6, 1.1], tilt: 0.10, shadow: true },
+  { file: 'grass_medium_01_1k',  size: 1.4, n: 3,  r: [5, 14], s: [0.6, 1.1], tilt: 0.16 },
+  { file: 'periwinkle_plant_1k', size: 1.2, n: 2,  r: [5, 12], s: [0.7, 1.3], tilt: 0.12 },
+  { file: 'tree_stump_01_1k',    size: 1.8, n: 2,  r: [9, 16], s: [0.8, 1.2], tilt: 0.03, shadow: true },
+  { file: 'rock_moss_set_02_1k', size: 2.6, n: 2,  r: [7, 15], s: [0.4, 0.7], tilt: 0.05, shadow: true },
+];
+const NEAR_RING = 14;                 // where the near bucket ends and the far one takes over
+const forest = new THREE.Group();
+forest.name = 'planting';
+scene.add(forest);
+const forestBuckets = [];
+
+/* the parts of one loaded plant: its meshes, flattened out of whatever hierarchy it arrived in,
+   with the package's own materials left exactly as they are — rebuilding an alpha-tested leaf
+   material is what turns it into a black card */
+function plantParts(root, targetSize) {
+  root.updateMatrixWorld(true);
+  /* These are scans: each arrives at its own size and lying whichever way it was captured, and its
+     geometry is quantised, which is why nothing here is baked into the vertices. Transforming a
+     quantised buffer in place writes floats back into short integers and every vertex snaps to the
+     face of its own bounding box — the plant becomes a crate. So the fitting is carried as a
+     matrix and folded into each instance instead. */
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  const s = targetSize / Math.max(0.05, Math.max(size.x, size.y, size.z));
+  const fit = new THREE.Matrix4()
+    .makeScale(s, s, s)
+    .multiply(new THREE.Matrix4().makeTranslation(-centre.x, -box.min.y, -centre.z));
+  const parts = [];
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    parts.push({ geometry: o.geometry, material: o.material, matrix: fit.clone().multiply(o.matrixWorld) });
+  });
+  return parts;
+}
+
+function plantBucket(parts, placements, far, casts) {
+  const group = new THREE.Group();
+  group.name = 'planting ' + (far ? 'far' : 'near');
+  const world = new THREE.Matrix4();
+  for (const part of parts) {
+    const batch = new THREE.InstancedMesh(part.geometry, part.material, placements.length);
+    placements.forEach((m, i) => batch.setMatrixAt(i, world.multiplyMatrices(m, part.matrix)));
+    batch.instanceMatrix.needsUpdate = true;
+    batch.castShadow = !far && casts;     // grass and moss are not worth a shadow pass
+    batch.receiveShadow = true;
+    batch.frustumCulled = true;
+    group.add(batch);
   }
-  bush.position.copy(polar(a, d, 0));
-  scene.add(bush);
+  return group;
 }
-for (let i = 0; i < 9; i++) {
-  const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.18 + rnd() * 0.4, 0), MAT.rock);
-  const a = rnd() * TAU, d = 3.5 + rnd() * 13;
-  m.position.copy(polar(a, d, 0.08));
-  m.rotation.set(rnd() * TAU, rnd() * TAU, rnd() * TAU);
-  m.castShadow = m.receiveShadow = true;
-  scene.add(m);
-}
-{
-  const tuftMat = new THREE.MeshStandardMaterial({ color: 0x5c8a44, roughness: 1, flatShading: true });
-  for (let i = 0; i < 26; i++) {
-    const m = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.32, 5), tuftMat);
-    const a = rnd() * TAU, d = 2 + rnd() * 16;
-    m.position.copy(polar(a, d, 0.14));
-    m.rotation.z = (rnd() - .5) * 0.3;
-    scene.add(m);
+
+async function plantForest() {
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), pos = new THREE.Vector3(), sc = new THREE.Vector3();
+  for (const spec of FOLIAGE) {
+    let asset;
+    try { asset = await loadGlb('assets/foliage/' + spec.file + '.glb'); }
+    catch (e) { console.warn('planting: ' + spec.file + ' did not load', e); continue; }
+    const parts = plantParts(asset, spec.size);
+    const near = [], far = [];
+    for (let i = 0; i < spec.n; i++) {
+      const a = rnd() * TAU;
+      const d = spec.r[0] + rnd() * (spec.r[1] - spec.r[0]);
+      const x = Math.cos(a) * d, z = Math.sin(a) * d;
+      if (Math.hypot(x, z) < 3.2) continue;                 // keep the root flare clear
+      const s = spec.s[0] + rnd() * (spec.s[1] - spec.s[0]);
+      pos.set(x, terrainY(x, z) - 0.04, z);
+      q.setFromEuler(new THREE.Euler((rnd() - 0.5) * spec.tilt, rnd() * TAU, (rnd() - 0.5) * spec.tilt));
+      sc.setScalar(s);
+      m.compose(pos, q, sc);
+      (d < NEAR_RING ? near : far).push(m.clone());
+    }
+    const bucket = { file: spec.file, near: null, far: null };
+    if (near.length) { bucket.near = plantBucket(parts, near, false, !!spec.shadow); forest.add(bucket.near); }
+    if (far.length) { bucket.far = plantBucket(parts, far, true, false); forest.add(bucket.far); }
+    forestBuckets.push(bucket);
   }
 }
-{
-  const stemMat = new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 1 });
-  const capMat = new THREE.MeshStandardMaterial({ color: 0xb8442c, roughness: 0.8, flatShading: true });
-  for (let i = 0; i < 3; i++) {
-    const g2 = new THREE.Group();
-    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 0.18, 8), stemMat);
-    stem.position.y = 0.09;
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8, 0, TAU, 0, Math.PI / 2), capMat);
-    cap.position.y = 0.16; cap.scale.y = 0.85; cap.castShadow = true;
-    g2.add(stem, cap);
-    g2.position.copy(polar(rnd() * TAU, 1.5 + rnd() * 1.4, 0));
-    g2.scale.setScalar(0.8 + rnd() * 0.7);
-    scene.add(g2);
+
+/* The far planting is only drawn while the camera is far enough away for it to be worth drawing;
+   close in it is behind you and costs shadow work for nothing. */
+let lastLod = -1;
+function updateForestLod(t) {
+  if (t - lastLod < 0.4) return;
+  lastLod = t;
+  const d = camera.position.length();
+  for (const b of forestBuckets) {
+    if (b.far) b.far.visible = d > 16;
+    if (b.near) b.near.visible = true;
   }
 }
 
@@ -1182,6 +1295,9 @@ async function loadScene() {
 
   /* the terraces can only be cut once the trunk they meet is in: they land on the bark itself */
   terraceBaseAsset = terrace;
+  loadGroundTextures();
+  ground = buildGround();
+  await plantForest();
   buildTrunkProfile();
   for (let i = 0; i < 3; i++) buildPlatform(i);
   applyPlatformPositions();
@@ -1208,6 +1324,8 @@ let frameCount = 0;
 window.app = {
   THREE, scene, camera, renderer, controls, trunk, platforms, state, CAM_DEFAULT, PLATFORM_DEFS,
   clampY, deckCentre, linkAnchor, dockTip, ladderEnds, trunkAt, deckOffset, applyPlatformPositions, updateConnections,
+  terrainY, forest, GROUND_R,
+  get ground() { return ground; },
   bridgePoint, BRIDGE_DROP, PAIRS, DECK_R, DECK_Z,
   get oak() { return oakTree; },
   get frame() { return frameCount; },
@@ -1267,6 +1385,7 @@ function animate() {
     c.position.x += c.userData.speed * dt;
     if (c.position.x > 80) c.position.x = -80;
   }
+  updateForestLod(t);
 
   const attr = fireflies.pts.geometry.attributes.position;
   for (let i = 0; i < fireflies.base.length; i++) {
