@@ -185,6 +185,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 /* ============================================================
    Constants, state, persistence
@@ -274,12 +275,14 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+renderer.toneMappingExposure = 1.05;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xe8dab6, 34, 118);
+/* The haze the designer's frames carry at the tree line, sampled off his own delivery: a pale
+   blue-grey rather than the warm sand this started with. */
+scene.fog = new THREE.Fog(0xbbc7cd, 38, 165);
 
 camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 400);
 camera.position.fromArray(state.cam ? state.cam.p : CAM_DEFAULT.p);
@@ -296,20 +299,26 @@ controls.enablePan = false;
 controls.addEventListener('end', persistSoon);
 controls.update();
 
-const hemi = new THREE.HemisphereLight(0xbfdcff, 0x6f8a52, 1.15);
+/* The rig is the designer's: one warm sun aimed at the middle of the tree, a cool sky above it and
+   a cold rim from behind to lift the far side, at his colours and his strengths. The sun's bearing
+   is mirrored, so that it comes over the viewer's shoulder in the opening view rather than from
+   behind the tree — his own frames are lit that way round, and it is what gives the trunk a bright
+   face and a dark one: measured on the bark, 89 against 74. */
+const hemi = new THREE.HemisphereLight(0xd9f7ef, 0x263b35, 1.05);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffe6b8, 2.6);
-sun.position.set(12, 17, 8);
+const sun = new THREE.DirectionalLight(0xffe0a1, 3.9);
+sun.position.set(16, 21, 14);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
-sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
-sun.shadow.camera.near = 4; sun.shadow.camera.far = 48;
-sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.03;
-scene.add(sun);
-const fill = new THREE.DirectionalLight(0xbcd7ff, 0.5);
-fill.position.set(-9, 7, -11);
-scene.add(fill);
+sun.shadow.camera.left = -17; sun.shadow.camera.right = 17;
+sun.shadow.camera.top = 23; sun.shadow.camera.bottom = -15;
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 65;
+sun.shadow.bias = -0.00025; sun.shadow.normalBias = 0.04;
+sun.target.position.set(0, 7, 0);
+scene.add(sun, sun.target);
+const rim = new THREE.DirectionalLight(0x94d3f0, 0.7);
+rim.position.set(-10, 15, -9);
+scene.add(rim);
 
 /* ============================================================
    Procedural textures + shared materials
@@ -441,11 +450,13 @@ function clearGroup(g) {
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(150, 32, 16),
   new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthWrite: false,
+    /* the sky is a backdrop, not a lit surface: it is painted at the values his frames show and
+       left out of the tone mapping, so it reads the same whatever the exposure does to the tree */
+    side: THREE.BackSide, depthWrite: false, toneMapped: false,
     uniforms: {
-      top: { value: new THREE.Color(0x3f7cba) },
-      mid: { value: new THREE.Color(0xf4ddb2) },
-      bot: { value: new THREE.Color(0x8a9c6c) },
+      top: { value: new THREE.Color(0x89b4ca) },   // the blue overhead in his frames
+      mid: { value: new THREE.Color(0xbbc7cd) },   // the pale haze along his tree line
+      bot: { value: new THREE.Color(0x8f9a7d) },
     },
     vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: 'varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;' +
@@ -457,7 +468,7 @@ const sky = new THREE.Mesh(
 scene.add(sky);
 
 const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: 0xfff1c4, transparent: true, opacity: 0.95, depthWrite: false, fog: false }));
-sunSprite.position.set(60, 44, -38);
+sunSprite.position.set(-62, 92, 57);         // on the axis the sun actually lights from
 sunSprite.scale.setScalar(26);
 scene.add(sunSprite);
 const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: 0xffe9bd, transparent: true, opacity: 0.22, depthWrite: false, fog: false }));
@@ -888,7 +899,7 @@ function buildBridge(p0, p1) {
   const rope = (side, lift, sagMul) => {
     const pts = [];
     for (let s = 0; s < S; s++) pts.push(bridgePoint(p0, p1, s / (S - 1), sag * sagMul, side, lift));
-    const t = tube(pts, side > 0 || side < 0 ? 0.03 : 0.03, MAT.rope);
+    const t = tube(pts, 0.045, MAT.rope);   // the designer's gauge: thin enough to read as rope, thick enough to see
     t.name = 'bridge rope';
     g.add(t);
   };
@@ -1109,7 +1120,10 @@ const loadGlb = async url => (await gltfLoader.loadAsync(url)).scene;
 function dressOak(root) {
   root.traverse(o => {
     if (!o.isMesh) return;
-    o.castShadow = true;
+    /* The bark casts; the leaves do not. A crown of alpha-tested cards throwing shadows puts the
+       whole trunk in its own shade, which is not what the designer's frames show — his tree has a
+       sunlit face and a dark one, and that is what the sun is there to draw. */
+    o.castShadow = !/leaf|foliage/i.test(o.name || '');
     o.receiveShadow = true;
     for (const m of [].concat(o.material)) {
       m.metalness = 0;
@@ -1127,10 +1141,35 @@ function dressOak(root) {
 
 let assetsReady = false;
 let loadError = null;
+/* The designer lights the tree with a captured sky rather than with lamps alone: the package's
+   cloudy morning, run through a PMREM so every surface picks up its colour and its direction. The
+   sky you see stays the painted gradient, as in his own build — this is what lights the wood. */
+const pmrem = new THREE.PMREMGenerator(renderer);
+async function loadEnvironment() {
+  const hdr = await new RGBELoader().loadAsync('assets/hdr/Cloudymorning4k.hdr');
+  hdr.mapping = THREE.EquirectangularReflectionMapping;
+  const env = pmrem.fromEquirectangular(hdr).texture;
+  scene.environment = env;
+  hdr.dispose();
+}
+
+/* How much of that sky each surface takes. Three r160 has no scene-wide dial for it, so it is set
+   on the materials once everything is in. */
+const ENV_WEIGHT = 0.85;
+function weighEnvironment() {
+  scene.traverse(o => {
+    if (!o.isMesh) return;
+    for (const m of [].concat(o.material)) {
+      if (m && 'envMapIntensity' in m) { m.envMapIntensity = ENV_WEIGHT; m.needsUpdate = true; }
+    }
+  });
+}
+
 async function loadScene() {
   const [oak, terrace] = await Promise.all([
     loadGlb('assets/models/OakTree.glb'),
     loadGlb('assets/models/base.glb'),
+    loadEnvironment(),
   ]);
   oak.updateMatrixWorld(true);
   const bb = new THREE.Box3().setFromObject(oak);
@@ -1148,6 +1187,7 @@ async function loadScene() {
   applyPlatformPositions();
   for (let i = 0; i < 3; i++) buildRailing(i);
   updateConnections();
+  weighEnvironment();
   assetsReady = true;
 }
 loadScene().catch(e => {

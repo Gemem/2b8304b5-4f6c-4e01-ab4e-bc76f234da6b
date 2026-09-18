@@ -44,12 +44,17 @@ test('the ropes read as a different colour from the boards they cross', async ({
           v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
           const p = v.clone().project(cam);
           if (Math.abs(p.x) > 0.95 || Math.abs(p.y) > 0.95 || p.z > 1) continue;
-          ray.setFromCamera(new THREE.Vector2(p.x, p.y), cam);
-          /* the first surface the eye would meet: the grab proxies around each terrace are meshes
-             with an invisible material, and they are not what is on screen */
-          const hit = ray.intersectObjects(a.scene.children, true)
-            .find(h => [].concat(h.object.material).every(mm => !mm || mm.visible !== false));
-          if (!hit || !set.has(hit.object)) continue;      // something else is in front here
+          /* the pixel and its neighbours must all be the same surface: a rope is a few pixels
+             across, and a sample on its edge reads whatever lies behind it.  (The grab proxies
+             around each terrace are meshes with an invisible material; they are not on screen.) */
+          let solid = true;
+          for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            ray.setFromCamera(new THREE.Vector2(p.x + dx * 2 / W, p.y + dy * 2 / H), cam);
+            const hit = ray.intersectObjects(a.scene.children, true)
+              .find(h => [].concat(h.object.material).every(mm => !mm || mm.visible !== false));
+            if (!hit || !set.has(hit.object)) { solid = false; break; }
+          }
+          if (!solid) continue;
           out.push([Math.round((p.x * 0.5 + 0.5) * W), Math.round((p.y * 0.5 + 0.5) * H)]);
         }
       }
@@ -60,9 +65,10 @@ test('the ropes read as a different colour from the boards they cross', async ({
       a.scene.traverse(o => { if (o.isMesh && match(o)) list.push(o); });
       return list;
     };
+    /* the ropes and the boards of the same bridge, so the two are read under the same light: a
+       terrace board in shade would say more about the sun than about the colours */
     const ropes = gather(o => o.name === 'bridge rope');
-    const boards = gather(o => o.name === 'bridge slat')
-      .concat(a.platforms.flatMap(p => p.boards));
+    const boards = gather(o => o.name === 'bridge slat');
     return {
       W, H,
       rope: pick(ropes, 60),
@@ -76,14 +82,17 @@ test('the ropes read as a different colour from the boards they cross', async ({
   expect(spots.board.length).toBeGreaterThan(5);
 
   const { w, h, data } = await frameBuffer(page);
+  /* medians rather than averages: a stray pixel on an edge or in a shadow should not decide it */
   const read = list => {
-    let r = 0, g = 0, b = 0, n = 0;
+    const rs = [], gs = [], bs = [];
     for (const [x, y] of list) {
       if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
       const o = ((h - 1 - y) * w + x) * 4;            // readPixels starts at the bottom row
-      r += data[o]; g += data[o + 1]; b += data[o + 2]; n++;
+      rs.push(data[o]); gs.push(data[o + 1]); bs.push(data[o + 2]);
     }
-    return n ? { r: r / n, g: g / n, b: b / n, n } : null;
+    if (!rs.length) return null;
+    const mid = arr => arr.sort((p, q) => p - q)[Math.floor(arr.length / 2)];
+    return { r: mid(rs), g: mid(gs), b: mid(bs), n: rs.length };
   };
   const rope = read(spots.rope.map(([x, y]) => [x, y]));
   const board = read(spots.board.map(([x, y]) => [x, y]));
