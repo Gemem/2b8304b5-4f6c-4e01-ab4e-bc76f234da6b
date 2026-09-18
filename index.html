@@ -1,0 +1,1091 @@
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The Old Oak · Treehouse Sandbox</title>
+<meta name="description" content="A tiny 3D treehouse on one grand trunk. Raise the decks, link them with rope bridges and ladders — your arrangement is saved and restored on every visit." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='38' r='30' fill='%234e7a38'/%3E%3Crect x='44' y='55' width='12' height='38' rx='5' fill='%237a5236'/%3E%3C/svg%3E" />
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,650;1,9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+  html, body { height: 100%; }
+  body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+  .font-display { font-family: 'Fraunces', Georgia, serif; }
+  #scene canvas { display: block; touch-action: none; cursor: grab; }
+  .glass {
+    background: rgba(9, 26, 18, .72);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255,255,255,.09);
+    box-shadow: 0 18px 50px -20px rgba(0,0,0,.55);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .28rem .55rem; border-radius: 999px;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
+    font-size: .62rem; letter-spacing: .02em; color: rgba(245,238,218,.72);
+  }
+  .conn-btn {
+    display: flex; align-items: center; gap: .6rem; width: 100%;
+    padding: .5rem .6rem; border-radius: .7rem; cursor: pointer; text-align: left;
+    border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.03);
+    color: rgba(245,238,218,.5); font-size: .78rem; transition: all .18s ease;
+  }
+  .conn-btn:hover { border-color: rgba(255,255,255,.25); color: rgba(245,238,218,.9); }
+  .conn-btn[aria-pressed="true"] { background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.45); color: #fde9b8; }
+  .conn-btn .conn-state { margin-left: auto; font-size: .6rem; letter-spacing: .1em; text-transform: uppercase; opacity: .6; }
+  .conn-btn[aria-pressed="true"] .conn-state { opacity: 1; color: #fbbf24; }
+  .conn-ic { display: grid; place-items: center; width: 1.65rem; height: 1.65rem; border-radius: .5rem; background: rgba(255,255,255,.06); flex: none; }
+  .conn-btn[aria-pressed="true"] .conn-ic { background: rgba(251,191,36,.18); }
+  .ghost-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+    padding: .5rem .6rem; border-radius: .65rem; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04);
+    color: rgba(245,238,218,.75); font-size: .72rem; font-weight: 500; transition: all .18s ease;
+  }
+  .ghost-btn:hover { border-color: rgba(251,191,36,.5); color: #fde9b8; background: rgba(251,191,36,.08); }
+  #tip {
+    position: fixed; z-index: 40; pointer-events: none;
+    transform: translate(-50%, -135%); opacity: 0; transition: opacity .15s ease;
+  }
+  #tip.show { opacity: 1; }
+  #pill {
+    position: fixed; left: 50%; bottom: 1.25rem; z-index: 45;
+    transform: translate(-50%, 180%); transition: transform .5s cubic-bezier(.2,.9,.25,1.15);
+  }
+  #pill.show { transform: translate(-50%, 0); }
+  .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  #loader {
+    position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+    background: radial-gradient(120% 120% at 50% 18%, #1d4430 0%, #0e241a 58%, #08160f 100%);
+    transition: opacity .7s ease, visibility .7s ease;
+  }
+  #loader.hide { opacity: 0; visibility: hidden; }
+  .spinner {
+    width: 42px; height: 42px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.15); border-top-color: #fbbf24;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .vignette { background: radial-gradient(125% 95% at 50% 42%, transparent 55%, rgba(6,16,11,.42) 100%); }
+</style>
+</head>
+<body class="h-screen w-screen overflow-hidden bg-[#12261b] text-[#f5eeda]">
+
+<div id="scene" class="fixed inset-0"></div>
+<div class="vignette fixed inset-0 z-10 pointer-events-none"></div>
+
+<!-- Header -->
+<header class="fixed left-4 top-4 z-30 max-w-[19rem]">
+  <div class="glass rounded-2xl p-4">
+    <div class="flex items-center gap-3">
+      <div class="grid place-items-center w-10 h-10 rounded-xl bg-amber-400/15 border border-amber-300/30 flex-none">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
+      </div>
+      <div>
+        <h1 class="font-display italic text-2xl leading-none text-amber-100">The Old Oak</h1>
+        <p class="text-[10px] uppercase tracking-[0.22em] text-white/40 mt-1">treehouse sandbox</p>
+      </div>
+    </div>
+    <p class="text-xs leading-relaxed text-white/60 mt-3">Three decks on one grand trunk. Raise them, link them — the arrangement is saved and waiting when you return.</p>
+    <div class="flex flex-wrap gap-1.5 mt-3">
+      <span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.9-6.6"/><path d="M21 3v6h-6"/></svg>drag to orbit</span>
+      <span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6M8 11h6"/></svg>scroll to zoom</span>
+      <span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="m8 7 4-4 4 4"/><path d="m8 17 4 4 4-4"/></svg>drag a deck up / down</span>
+    </div>
+  </div>
+</header>
+
+<!-- Connections panel -->
+<aside class="fixed right-4 top-4 z-30 w-[15.5rem]">
+  <div class="glass rounded-2xl p-4">
+    <h2 class="text-sm font-semibold text-amber-100">Connections</h2>
+    <p class="text-[10px] text-white/40 mt-0.5">Span the gaps between decks</p>
+
+    <p class="text-[10px] uppercase tracking-[0.16em] text-white/35 mt-4 mb-1.5">Deck 1 ↔ Deck 2</p>
+    <div class="space-y-1.5">
+      <button class="conn-btn" data-conn="b01" aria-pressed="true">
+        <span class="conn-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 17c5-6.5 15-6.5 20 0"/><path d="M4 17v-6M20 17v-6"/><path d="M2 11c5-5 15-5 20 0"/></svg></span>
+        Rope bridge <span class="conn-state">On</span>
+      </button>
+      <button class="conn-btn" data-conn="l01" aria-pressed="false">
+        <span class="conn-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v18M16 3v18"/><path d="M8 8h8M8 13h8M8 18h8"/></svg></span>
+        Ladder <span class="conn-state">Off</span>
+      </button>
+    </div>
+
+    <p class="text-[10px] uppercase tracking-[0.16em] text-white/35 mt-3.5 mb-1.5">Deck 2 ↔ Deck 3</p>
+    <div class="space-y-1.5">
+      <button class="conn-btn" data-conn="b12" aria-pressed="false">
+        <span class="conn-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 17c5-6.5 15-6.5 20 0"/><path d="M4 17v-6M20 17v-6"/><path d="M2 11c5-5 15-5 20 0"/></svg></span>
+        Rope bridge <span class="conn-state">Off</span>
+      </button>
+      <button class="conn-btn" data-conn="l12" aria-pressed="true">
+        <span class="conn-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v18M16 3v18"/><path d="M8 8h8M8 13h8M8 18h8"/></svg></span>
+        Ladder <span class="conn-state">On</span>
+      </button>
+    </div>
+
+    <div class="border-t border-white/10 mt-4 pt-3 grid grid-cols-2 gap-1.5">
+      <button id="resetView" class="ghost-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.9-6.6"/><path d="M21 3v6h-6"/></svg>Reset view</button>
+      <button id="resetTree" class="ghost-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Reset tree</button>
+    </div>
+
+    <div class="flex items-start gap-2 mt-3.5 text-[10px] leading-relaxed text-white/40">
+      <svg class="flex-none mt-px" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+      <span>Auto-saved in this browser — 100% of your layout returns with you.</span>
+    </div>
+    <p class="text-[10px] text-white/30 mt-2">Tip: hover a deck, then use ↑ / ↓ for fine nudges.</p>
+  </div>
+</aside>
+
+<!-- Drag tooltip -->
+<div id="tip" class="glass rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-amber-100 whitespace-nowrap"></div>
+
+<!-- Saved pill -->
+<div id="pill" class="glass rounded-full px-4 py-2 flex items-center gap-2">
+  <span class="pulse-dot inline-block w-2 h-2 rounded-full bg-green-400"></span>
+  <span id="pillText" class="text-xs text-white/85">Arrangement saved</span>
+</div>
+
+<!-- Loader -->
+<div id="loader">
+  <div class="flex flex-col items-center gap-4">
+    <div class="spinner"></div>
+    <p class="font-display italic text-xl text-amber-100">Growing the Old Oak…</p>
+    <p id="loaderText" class="text-xs text-white/40">waking up the fireflies</p>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ============================================================
+   Constants, state, persistence
+============================================================ */
+const UP = new THREE.Vector3(0, 1, 0);
+const MIN_Y = 1.6, MAX_Y = 11.0, GAP = 2.0;
+const STORE_KEY = 'old-oak-treehouse-v1';
+const PLATFORM_DEFS = [
+  { name: 'Hearth Deck',  radius: 2.6, angle: 0.5, def: 2.6 },
+  { name: 'Canopy Deck',  radius: 2.3, angle: 2.2, def: 6.2 },
+  { name: "Crow's Nest",  radius: 2.0, angle: 4.4, def: 9.6 },
+];
+const LADDER_ANGLE = { l01: 5.6, l12: 1.5 };
+const DEFAULT_CONN = { b01: true, l01: false, b12: false, l12: true };
+const CAM_DEFAULT = { p: [11.5, 7.6, 13.5], t: [0, 5.4, 0] };
+const TAU = Math.PI * 2;
+
+function readStore() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    return (s && s.v === 1) ? s : null;
+  } catch (e) { return null; }
+}
+const saved = readStore();
+const state = {
+  ys: PLATFORM_DEFS.map((d, i) => (saved && Array.isArray(saved.ys) && isFinite(saved.ys[i])) ? +saved.ys[i] : d.def),
+  conn: Object.assign({}, DEFAULT_CONN, saved && saved.conn ? saved.conn : {}),
+  cam: (saved && saved.cam && Array.isArray(saved.cam.p) && Array.isArray(saved.cam.t)) ? saved.cam : null,
+};
+// sanitize: clamp + keep deck ordering with minimum gap
+state.ys = state.ys.map(y => Math.min(Math.max(y, MIN_Y), MAX_Y));
+state.ys[0] = Math.min(state.ys[0], MAX_Y - 2 * GAP);
+state.ys[1] = Math.min(Math.max(state.ys[1], state.ys[0] + GAP), MAX_Y - GAP);
+state.ys[2] = Math.min(Math.max(state.ys[2], state.ys[1] + GAP), MAX_Y);
+for (const k of Object.keys(DEFAULT_CONN)) state.conn[k] = !!state.conn[k];
+
+const pill = document.getElementById('pill');
+const pillText = document.getElementById('pillText');
+let pillTimer = null;
+function flashPill(msg, long = false) {
+  pillText.textContent = msg;
+  pill.classList.add('show');
+  clearTimeout(pillTimer);
+  pillTimer = setTimeout(() => pill.classList.remove('show'), long ? 4200 : 1800);
+}
+
+let camera, controls; // forward refs
+function persist(flashMsg) {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      v: 1,
+      ys: state.ys.map(y => +y.toFixed(3)),
+      conn: state.conn,
+      cam: { p: camera.position.toArray(), t: controls.target.toArray() },
+    }));
+  } catch (e) { /* storage unavailable */ }
+  if (flashMsg) flashPill(flashMsg === true ? 'Arrangement saved' : flashMsg);
+}
+let persistTimer = null;
+function persistSoon() { clearTimeout(persistTimer); persistTimer = setTimeout(() => persist(false), 350); }
+window.addEventListener('beforeunload', () => persist(false));
+
+/* ============================================================
+   Renderer, scene, camera, lights
+============================================================ */
+const container = document.getElementById('scene');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('loaderText').textContent = 'WebGL is not available in this browser.';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xe8dab6, 34, 118);
+
+camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 400);
+camera.position.fromArray(state.cam ? state.cam.p : CAM_DEFAULT.p);
+
+controls = new OrbitControls(camera, renderer.domElement);
+controls.target.fromArray(state.cam ? state.cam.t : CAM_DEFAULT.t);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 5.5;
+controls.maxDistance = 38;
+controls.minPolarAngle = 0.3;
+controls.maxPolarAngle = 1.52;
+controls.enablePan = false;
+controls.addEventListener('end', persistSoon);
+controls.update();
+
+const hemi = new THREE.HemisphereLight(0xbfdcff, 0x6f8a52, 1.15);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffe6b8, 2.6);
+sun.position.set(12, 17, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
+sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
+sun.shadow.camera.near = 4; sun.shadow.camera.far = 48;
+sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.03;
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0xbcd7ff, 0.5);
+fill.position.set(-9, 7, -11);
+scene.add(fill);
+
+/* ============================================================
+   Procedural textures + shared materials
+============================================================ */
+function makeCanvas(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  return t;
+}
+let seed = 42;
+function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+
+const barkTex = makeCanvas(128, 256, (g, w, h) => {
+  g.fillStyle = '#6d4a33'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 110; i++) {
+    const x = rnd() * w, ww = 1.5 + rnd() * 5, dark = rnd() > 0.5;
+    g.strokeStyle = dark ? 'rgba(58,36,24,0.5)' : 'rgba(146,106,72,0.4)';
+    g.lineWidth = ww;
+    g.beginPath();
+    g.moveTo(x, -10);
+    g.bezierCurveTo(x + (rnd() - .5) * 18, h * .33, x + (rnd() - .5) * 18, h * .66, x + (rnd() - .5) * 12, h + 10);
+    g.stroke();
+  }
+});
+barkTex.repeat.set(3, 2);
+
+const plankTex = makeCanvas(256, 256, (g, w, h) => {
+  g.fillStyle = '#96683f'; g.fillRect(0, 0, w, h);
+  const rows = 6;
+  for (let r = 0; r < rows; r++) {
+    const y = r * h / rows, tone = 0.88 + rnd() * 0.24;
+    g.fillStyle = 'rgb(' + Math.round(150 * tone) + ',' + Math.round(104 * tone) + ',' + Math.round(63 * tone) + ')';
+    g.fillRect(0, y, w, h / rows);
+    g.fillStyle = 'rgba(60,38,22,0.55)';
+    g.fillRect(0, y, w, 2.5);
+    for (let i = 0; i < 9; i++) {
+      g.strokeStyle = 'rgba(80,50,28,' + (0.06 + rnd() * 0.1) + ')';
+      g.lineWidth = 1 + rnd() * 1.6;
+      const gy = y + 4 + rnd() * (h / rows - 8);
+      g.beginPath();
+      g.moveTo(0, gy);
+      g.bezierCurveTo(w * .3, gy + (rnd() - .5) * 6, w * .7, gy + (rnd() - .5) * 6, w, gy + (rnd() - .5) * 4);
+      g.stroke();
+    }
+    if (rnd() > 0.5) {
+      const kx = rnd() * w, ky = y + h / rows / 2;
+      g.fillStyle = 'rgba(70,44,26,0.5)';
+      g.beginPath(); g.ellipse(kx, ky, 3 + rnd() * 3, 2 + rnd() * 2, 0, 0, TAU); g.fill();
+    }
+  }
+});
+
+const dotTex = makeCanvas(64, 64, (g, w, h) => {
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.35, 'rgba(255,255,255,0.6)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, w, h);
+});
+
+const signTex = makeCanvas(512, 128, (g, w, h) => {
+  g.fillStyle = '#7d5a38'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = 'rgba(58,36,22,0.6)'; g.lineWidth = 8; g.strokeRect(6, 6, w - 12, h - 12);
+  for (let i = 0; i < 30; i++) {
+    g.strokeStyle = 'rgba(70,45,26,' + (0.05 + rnd() * 0.08) + ')';
+    g.lineWidth = 1 + rnd() * 2;
+    const gy = rnd() * h;
+    g.beginPath(); g.moveTo(0, gy); g.lineTo(w, gy + (rnd() - .5) * 10); g.stroke();
+  }
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '700 52px Georgia, serif';
+  g.fillStyle = 'rgba(255,230,190,0.28)'; g.fillText('THE OLD OAK', w / 2, h / 2 + 3);
+  g.fillStyle = '#3a2716'; g.fillText('THE OLD OAK', w / 2, h / 2);
+  g.fillStyle = '#2e1f10';
+  g.beginPath(); g.arc(26, h / 2, 6, 0, TAU); g.arc(w - 26, h / 2, 6, 0, TAU); g.fill();
+});
+
+const MAT = {
+  bark: new THREE.MeshStandardMaterial({ map: barkTex, roughness: 1 }),
+  wood: [
+    new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.85, color: 0xffffff }),
+    new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.85, color: 0xf3e2c8 }),
+    new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.85, color: 0xe2c9a6 }),
+  ],
+  woodDark: new THREE.MeshStandardMaterial({ color: 0x6e4a2f, roughness: 0.9 }),
+  rope: new THREE.MeshStandardMaterial({ color: 0xb59a6b, roughness: 1 }),
+  rock: new THREE.MeshStandardMaterial({ color: 0x8f8f86, roughness: 1, flatShading: true }),
+  leaf: [0x4f7d3a, 0x5d9042, 0x6fa24e, 0x587f36].map(c =>
+    new THREE.MeshStandardMaterial({ color: c, roughness: 1, flatShading: true })),
+  hit: new THREE.MeshBasicMaterial({ visible: false }),
+};
+
+/* ============================================================
+   Geometry helpers
+============================================================ */
+function polar(a, r, y) { return new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r); }
+function dAng(a, b) { return Math.atan2(Math.sin(a - b), Math.cos(a - b)); }
+function cylBetween(a, b, r, mat, seg = 8) {
+  const d = new THREE.Vector3().subVectors(b, a);
+  const len = d.length();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg), mat);
+  m.position.copy(a).addScaledVector(d, 0.5);
+  m.quaternion.setFromUnitVectors(UP, d.normalize());
+  m.castShadow = true;
+  return m;
+}
+function tube(pts, r, mat, closed = false) {
+  const curve = new THREE.CatmullRomCurve3(pts, closed);
+  const m = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(10, pts.length * 3), r, 6, closed), mat);
+  m.castShadow = true;
+  return m;
+}
+function clearGroup(g) {
+  for (const c of g.children.slice()) {
+    c.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    g.remove(c);
+  }
+}
+
+/* ============================================================
+   Environment: sky, ground, trunk, dressing
+============================================================ */
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(150, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false,
+    uniforms: {
+      top: { value: new THREE.Color(0x3f7cba) },
+      mid: { value: new THREE.Color(0xf4ddb2) },
+      bot: { value: new THREE.Color(0x8a9c6c) },
+    },
+    vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;' +
+      'void main(){ float h = normalize(vP).y;' +
+      'vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.55)) : mix(mid, bot, pow(-h, 0.6));' +
+      'gl_FragColor = vec4(c, 1.0); }',
+  })
+);
+scene.add(sky);
+
+const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: 0xfff1c4, transparent: true, opacity: 0.95, depthWrite: false, fog: false }));
+sunSprite.position.set(60, 44, -38);
+sunSprite.scale.setScalar(26);
+scene.add(sunSprite);
+const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: 0xffe9bd, transparent: true, opacity: 0.22, depthWrite: false, fog: false }));
+halo.position.copy(sunSprite.position);
+halo.scale.setScalar(64);
+scene.add(halo);
+
+const ground = new THREE.Mesh(new THREE.CircleGeometry(130, 48), new THREE.MeshStandardMaterial({ color: 0x6f9c52, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+for (let i = 0; i < 9; i++) { // soft grass patches
+  const r = 1.4 + rnd() * 2.6;
+  const p = new THREE.Mesh(new THREE.CircleGeometry(r, 20), new THREE.MeshStandardMaterial({ color: 0x67924b, roughness: 1 }));
+  p.rotation.x = -Math.PI / 2;
+  const a = rnd() * TAU, d = 3 + rnd() * 22;
+  p.position.set(Math.cos(a) * d, 0.03, Math.sin(a) * d);
+  p.receiveShadow = true;
+  scene.add(p);
+}
+
+// --- trunk with organic noise + root flare ---
+const trunkGeo = new THREE.CylinderGeometry(0.34, 0.82, 14, 26, 22, false);
+{
+  const pos = trunkGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const wy = y + 7;
+    const ang = Math.atan2(z, x);
+    const r = Math.hypot(x, z);
+    if (r < 1e-4) continue;
+    const n = 0.05 * Math.sin(ang * 3.1 + wy * 0.7) + 0.03 * Math.sin(ang * 6.7 - wy * 1.3);
+    const flare = wy < 1.5 ? 1 + (1.5 - wy) * 0.5 : 1;
+    const nr = r * (1 + n) * flare;
+    pos.setX(i, Math.cos(ang) * nr);
+    pos.setZ(i, Math.sin(ang) * nr);
+  }
+  trunkGeo.computeVertexNormals();
+}
+const trunk = new THREE.Mesh(trunkGeo, MAT.bark);
+trunk.position.y = 7;
+trunk.castShadow = trunk.receiveShadow = true;
+scene.add(trunk);
+
+for (let k = 0; k < 6; k++) { // roots
+  const a = k / 6 * TAU + 0.35;
+  const out = new THREE.Vector3(Math.cos(a), -0.5, Math.sin(a)).normalize();
+  const root = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.24, 2.0, 8), MAT.bark);
+  root.position.copy(polar(a, 1.0, 0.2));
+  root.quaternion.setFromUnitVectors(UP, out);
+  root.castShadow = true;
+  scene.add(root);
+}
+
+// --- swing branch + swing ---
+const swing = { pivot: null, axis: null };
+{
+  const a = 3.6;
+  const base = polar(a, 0.2, 5.55);
+  const dir = new THREE.Vector3(Math.cos(a), 0.45, Math.sin(a)).normalize();
+  const tip = base.clone().addScaledVector(dir, 2.6);
+  const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.15, 2.6, 10), MAT.bark);
+  branch.position.copy(base).addScaledVector(dir, 1.3);
+  branch.quaternion.setFromUnitVectors(UP, dir);
+  branch.castShadow = true;
+  scene.add(branch);
+
+  const pivot = new THREE.Group();
+  pivot.position.copy(tip);
+  const axis = new THREE.Vector3(Math.cos(a), 0, Math.sin(a)).normalize();
+  const ropeLen = 5.3;
+  for (const s of [-0.24, 0.24]) {
+    const off = axis.clone().multiplyScalar(s);
+    pivot.add(cylBetween(off, off.clone().add(new THREE.Vector3(0, -ropeLen, 0)), 0.022, MAT.rope, 6));
+  }
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.06, 0.26), MAT.wood[2]);
+  seat.position.y = -ropeLen - 0.02;
+  seat.rotation.y = Math.atan2(axis.x, axis.z) + Math.PI / 2;
+  seat.castShadow = true;
+  pivot.add(seat);
+  scene.add(pivot);
+  swing.pivot = pivot; swing.axis = axis;
+}
+
+// --- spiral steps near the ground ---
+for (let k = 0; k < 8; k++) {
+  const y = 0.42 + k * 0.13;
+  const a = 0.9 + k * 0.52;
+  const step = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.24), MAT.wood[k % 3]);
+  step.position.copy(polar(a, y < 1.2 ? 1.0 : 0.88, y));
+  step.rotation.y = -a + Math.PI / 2;
+  step.castShadow = step.receiveShadow = true;
+  scene.add(step);
+}
+
+// --- carved sign ---
+{
+  const a = 1.05;
+  const sign = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.42, 0.05), new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.9 }));
+  sign.position.copy(polar(a, 0.92, 1.62));
+  sign.lookAt(polar(a, 3, 1.62));
+  sign.castShadow = true;
+  scene.add(sign);
+}
+
+// --- canopy ---
+const canopy = new THREE.Group();
+{
+  const blobs = [];
+  for (let k = 0; k < 8; k++) blobs.push({ a: k * Math.PI / 4 + 0.2, r: 2.6, y: 13.6, s: 1.5 });
+  for (let k = 0; k < 4; k++) blobs.push({ a: k * Math.PI / 2 + 0.6, r: 1.3, y: 14.8, s: 1.45 });
+  blobs.push({ a: 0, r: 0.2, y: 15.9, s: 1.55 });
+  blobs.push({ a: 2, r: 0.3, y: 12.9, s: 1.35 });
+  blobs.push({ a: 4.2, r: 0.9, y: 13.1, s: 1.2 });
+  for (const b of blobs) {
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(b.s, 1), MAT.leaf[Math.floor(rnd() * MAT.leaf.length)]);
+    m.position.copy(polar(b.a, b.r, b.y));
+    m.rotation.set(rnd() * TAU, rnd() * TAU, rnd() * TAU);
+    m.scale.setScalar(0.85 + rnd() * 0.35);
+    m.castShadow = true;
+    canopy.add(m);
+  }
+}
+scene.add(canopy);
+
+// --- bushes, rocks, tufts, mushrooms ---
+for (let i = 0; i < 6; i++) {
+  const a = rnd() * TAU, d = 6 + rnd() * 11;
+  const bush = new THREE.Group();
+  const n = 2 + Math.floor(rnd() * 2);
+  for (let k = 0; k < n; k++) {
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5 + rnd() * 0.45, 1), MAT.leaf[Math.floor(rnd() * MAT.leaf.length)]);
+    m.position.set((rnd() - .5) * 1.1, 0.35 + rnd() * 0.25, (rnd() - .5) * 1.1);
+    m.castShadow = true;
+    bush.add(m);
+  }
+  bush.position.copy(polar(a, d, 0));
+  scene.add(bush);
+}
+for (let i = 0; i < 9; i++) {
+  const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.18 + rnd() * 0.4, 0), MAT.rock);
+  const a = rnd() * TAU, d = 3.5 + rnd() * 13;
+  m.position.copy(polar(a, d, 0.08));
+  m.rotation.set(rnd() * TAU, rnd() * TAU, rnd() * TAU);
+  m.castShadow = m.receiveShadow = true;
+  scene.add(m);
+}
+{
+  const tuftMat = new THREE.MeshStandardMaterial({ color: 0x5c8a44, roughness: 1, flatShading: true });
+  for (let i = 0; i < 26; i++) {
+    const m = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.32, 5), tuftMat);
+    const a = rnd() * TAU, d = 2 + rnd() * 16;
+    m.position.copy(polar(a, d, 0.14));
+    m.rotation.z = (rnd() - .5) * 0.3;
+    scene.add(m);
+  }
+}
+{
+  const stemMat = new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 1 });
+  const capMat = new THREE.MeshStandardMaterial({ color: 0xb8442c, roughness: 0.8, flatShading: true });
+  for (let i = 0; i < 3; i++) {
+    const g2 = new THREE.Group();
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 0.18, 8), stemMat);
+    stem.position.y = 0.09;
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8, 0, TAU, 0, Math.PI / 2), capMat);
+    cap.position.y = 0.16; cap.scale.y = 0.85; cap.castShadow = true;
+    g2.add(stem, cap);
+    g2.position.copy(polar(rnd() * TAU, 1.5 + rnd() * 1.4, 0));
+    g2.scale.setScalar(0.8 + rnd() * 0.7);
+    scene.add(g2);
+  }
+}
+
+// --- clouds ---
+const clouds = [];
+{
+  const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.82 });
+  for (let i = 0; i < 4; i++) {
+    const c = new THREE.Group();
+    const n = 3 + Math.floor(rnd() * 3);
+    for (let k = 0; k < n; k++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(1.6 + rnd() * 1.6, 12, 10), cloudMat);
+      m.position.set(k * 2.2 - n, (rnd() - .5) * 0.8, (rnd() - .5) * 1.6);
+      m.scale.y = 0.45;
+      c.add(m);
+    }
+    c.position.set((rnd() - .5) * 110, 19 + rnd() * 8, (rnd() - .5) * 110);
+    c.userData.speed = 0.35 + rnd() * 0.45;
+    clouds.push(c);
+    scene.add(c);
+  }
+}
+
+// --- fireflies ---
+const fireflies = { pts: null, base: [], phase: [] };
+{
+  const N = 46;
+  const arr = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const a = rnd() * TAU, d = 2.5 + rnd() * 8;
+    fireflies.base.push([Math.cos(a) * d, 0.5 + rnd() * 6, Math.sin(a) * d]);
+    fireflies.phase.push(rnd() * TAU);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+  const mat = new THREE.PointsMaterial({ size: 0.14, map: dotTex, color: 0xffd98a, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending });
+  fireflies.pts = new THREE.Points(geo, mat);
+  scene.add(fireflies.pts);
+}
+
+/* ============================================================
+   Platforms
+============================================================ */
+const platforms = [];
+const hitMeshes = [];
+
+function buildPlatform(i) {
+  const def = PLATFORM_DEFS[i];
+  const R = def.radius;
+  const g = new THREE.Group();
+
+  const N = 22; // radial deck planks
+  for (let k = 0; k < N; k++) {
+    const a = k / N * TAU;
+    const len = R - 0.4;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(len, 0.09, (TAU * R / N) * 0.94), MAT.wood[k % 3]);
+    const rm = 0.4 + len / 2;
+    p.position.set(Math.cos(a) * rm, 0, Math.sin(a) * rm);
+    p.rotation.y = -a;
+    p.castShadow = p.receiveShadow = true;
+    g.add(p);
+  }
+
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(R - 0.02, 0.06, 10, 56), MAT.woodDark);
+  rim.rotation.x = Math.PI / 2;
+  rim.castShadow = true;
+  g.add(rim);
+
+  for (let k = 0; k < 3; k++) { // under-deck beams
+    const b = new THREE.Mesh(new THREE.BoxGeometry(R * 2 - 0.3, 0.1, 0.14), MAT.woodDark);
+    b.position.y = -0.09;
+    b.rotation.y = k * Math.PI / 3;
+    b.castShadow = true;
+    g.add(b);
+  }
+  for (let k = 0; k < 4; k++) { // diagonal struts into trunk
+    const a = def.angle + Math.PI / 4 + k * Math.PI / 2;
+    g.add(cylBetween(polar(a, 0.15, -1.15), polar(a, R * 0.75, -0.12), 0.05, MAT.woodDark));
+  }
+
+  // dock (landing for bridges)
+  const dock = new THREE.Group();
+  dock.rotation.y = Math.atan2(Math.cos(def.angle), Math.sin(def.angle));
+  const dz0 = R - 0.35, dz1 = R + 0.95;
+  for (let k = 0; k < 4; k++) {
+    const pl = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, dz1 - dz0), MAT.wood[(k + 1) % 3]);
+    pl.position.set(-0.36 + k * 0.24, 0.005, (dz0 + dz1) / 2);
+    pl.castShadow = pl.receiveShadow = true;
+    dock.add(pl);
+  }
+  const postGeo = new THREE.CylinderGeometry(0.032, 0.04, 0.9, 8);
+  [[-0.44, R + 0.05], [0.44, R + 0.05], [-0.46, R + 0.85], [0.46, R + 0.85]].forEach(([x, z]) => {
+    const p = new THREE.Mesh(postGeo, MAT.woodDark);
+    p.position.set(x, 0.47, z);
+    p.castShadow = true;
+    dock.add(p);
+  });
+  [-0.46, 0.46].forEach(x => {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), MAT.woodDark);
+    cap.position.set(x, 0.94, R + 0.85);
+    dock.add(cap);
+  });
+  [-0.45, 0.45].forEach(x => {
+    dock.add(tube([
+      new THREE.Vector3(x, 0.84, R + 0.05),
+      new THREE.Vector3(x, 0.74, R + 0.45),
+      new THREE.Vector3(x, 0.86, R + 0.85),
+    ], 0.024, MAT.rope));
+  });
+  dock.add(cylBetween(new THREE.Vector3(0, -1.0, R * 0.2), new THREE.Vector3(0, -0.06, R + 0.6), 0.05, MAT.woodDark));
+  g.add(dock);
+
+  // railing lives in its own group so it can rebuild when ladders toggle
+  const railGroup = new THREE.Group();
+  g.add(railGroup);
+
+  // hover highlight ring
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(R + 0.16, 0.05, 8, 64),
+    new THREE.MeshBasicMaterial({ color: 0xffc878, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.12;
+  ring.visible = false;
+  g.add(ring);
+
+  // fat invisible grab cylinder
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(R + 1.3, R + 1.3, 0.6, 18), MAT.hit);
+  hit.position.y = 0.1;
+  hit.userData.idx = i;
+  g.add(hit);
+  hitMeshes.push(hit);
+
+  scene.add(g);
+  platforms[i] = { def, group: g, railGroup, ring };
+}
+
+function buildRailing(i) {
+  const P = platforms[i], def = P.def, R = def.radius, g = P.railGroup;
+  clearGroup(g);
+  const gaps = [{ a: def.angle, w: 0.62 }];
+  if (i > 0 && state.conn['l' + (i - 1) + i]) gaps.push({ a: LADDER_ANGLE['l' + (i - 1) + i], w: 0.5 });
+  if (i < 2 && state.conn['l' + i + (i + 1)]) gaps.push({ a: LADDER_ANGLE['l' + i + (i + 1)], w: 0.5 });
+  const near = a => gaps.some(gp => Math.abs(dAng(a, gp.a)) < gp.w);
+  const rRail = R - 0.09;
+  const postGeo = new THREE.CylinderGeometry(0.035, 0.045, 0.95, 8);
+  for (let k = 0; k < 20; k++) {
+    const a = k / 20 * TAU;
+    if (near(a)) continue;
+    const p = new THREE.Mesh(postGeo, MAT.woodDark);
+    p.position.set(Math.cos(a) * rRail, 0.5, Math.sin(a) * rRail);
+    p.castShadow = true;
+    g.add(p);
+  }
+  const sorted = gaps.map(gp => ({ a: ((gp.a % TAU) + TAU) % TAU, w: gp.w })).sort((x, y) => x.a - y.a);
+  for (let k = 0; k < sorted.length; k++) {
+    const cur = sorted[k], nxt = sorted[(k + 1) % sorted.length];
+    const start = cur.a + cur.w;
+    let end = nxt.a - nxt.w;
+    if (end <= start) end += TAU;
+    if (end - start < 0.3) continue;
+    for (const h of [0.95, 0.55]) {
+      const pts = [];
+      const seg = Math.max(6, Math.ceil((end - start) / 0.12));
+      for (let s = 0; s <= seg; s++) {
+        const a = start + (end - start) * s / seg;
+        pts.push(new THREE.Vector3(Math.cos(a) * rRail, h, Math.sin(a) * rRail));
+      }
+      g.add(tube(pts, 0.028, MAT.rope));
+    }
+  }
+}
+
+/* ============================================================
+   Bridges + ladders
+============================================================ */
+const connGroup = new THREE.Group();
+scene.add(connGroup);
+
+function dockTip(i) {
+  const d = PLATFORM_DEFS[i];
+  return polar(d.angle, d.radius + 0.85, state.ys[i] + 0.05);
+}
+function ladderEnds(i, j) {
+  const a = LADDER_ANGLE['l' + i + j];
+  return [
+    polar(a, PLATFORM_DEFS[i].radius - 0.75, state.ys[i] + 0.04),
+    polar(a, PLATFORM_DEFS[j].radius + 0.16, state.ys[j] + 0.02),
+  ];
+}
+
+function buildBridge(p0, p1) {
+  const g = new THREE.Group();
+  const flat = new THREE.Vector3(p1.x - p0.x, 0, p1.z - p0.z);
+  const horiz = flat.length();
+  const dirH = flat.clone().normalize();
+  const perp = new THREE.Vector3(-dirH.z, 0, dirH.x);
+  const dist = p0.distanceTo(p1);
+  const sag = Math.min(0.16 * horiz + 0.15, 0.85);
+  const pt = (t, side = 0, lift = 0, sagMul = 1) => new THREE.Vector3()
+    .lerpVectors(p0, p1, t)
+    .addScaledVector(perp, side)
+    .add(new THREE.Vector3(0, lift - Math.sin(t * Math.PI) * sag * sagMul, 0));
+
+  const n = THREE.MathUtils.clamp(Math.round(dist / 0.42), 6, 24);
+  for (let k = 0; k < n; k++) {
+    const t = (k + 0.5) / n;
+    const pl = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.05, 0.3), MAT.wood[k % 3]);
+    pl.position.copy(pt(t));
+    pl.lookAt(pt(Math.min(1, t + 0.03)));
+    pl.rotateZ(Math.sin(k * 7.31) * 0.05);
+    pl.castShadow = pl.receiveShadow = true;
+    g.add(pl);
+  }
+  const S = 17;
+  for (const side of [-0.34, 0.34]) { // deck-level edge ropes
+    const pts = [];
+    for (let s = 0; s < S; s++) pts.push(pt(s / (S - 1), side, 0.03, 1));
+    g.add(tube(pts, 0.03, MAT.rope));
+  }
+  for (const side of [-0.37, 0.37]) { // hand ropes
+    const pts = [];
+    for (let s = 0; s < S; s++) pts.push(pt(s / (S - 1), side, 0.85, 0.8));
+    g.add(tube(pts, 0.028, MAT.rope));
+  }
+  for (let k = 0; k < n; k += 2) { // vertical ties
+    const t = (k + 0.5) / n;
+    for (const [s1, s2] of [[-0.34, -0.37], [0.34, 0.37]]) {
+      g.add(cylBetween(pt(t, s1, 0.05, 1), pt(t, s2, 0.82, 0.8), 0.013, MAT.rope, 5));
+    }
+  }
+  return g;
+}
+
+function buildLadder(A, B) {
+  const g = new THREE.Group();
+  const d = new THREE.Vector3().subVectors(B, A);
+  const len = d.length();
+  g.position.copy(A);
+  g.quaternion.setFromUnitVectors(UP, d.clone().normalize());
+  for (const x of [-0.3, 0.3]) {
+    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, len + 0.7, 8), MAT.woodDark);
+    rail.position.set(x, len / 2 + 0.08, 0);
+    rail.castShadow = true;
+    g.add(rail);
+  }
+  for (let y = 0.34; y < len - 0.2; y += 0.36) {
+    const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.56, 8), MAT.wood[1]);
+    rung.rotation.z = Math.PI / 2;
+    rung.position.y = y;
+    rung.castShadow = true;
+    g.add(rung);
+  }
+  return g;
+}
+
+const PAIRS = [
+  { b: 'b01', l: 'l01', i: 0, j: 1 },
+  { b: 'b12', l: 'l12', i: 1, j: 2 },
+];
+function updateConnections() {
+  clearGroup(connGroup);
+  for (const pr of PAIRS) {
+    if (state.conn[pr.b]) connGroup.add(buildBridge(dockTip(pr.i), dockTip(pr.j)));
+    if (state.conn[pr.l]) {
+      const [A, B] = ladderEnds(pr.i, pr.j);
+      connGroup.add(buildLadder(A, B));
+    }
+  }
+}
+
+/* ============================================================
+   Build world pieces that depend on state
+============================================================ */
+for (let i = 0; i < 3; i++) buildPlatform(i);
+function applyPlatformPositions() {
+  platforms.forEach((p, i) => { p.group.position.y = state.ys[i]; });
+}
+applyPlatformPositions();
+for (let i = 0; i < 3; i++) buildRailing(i);
+updateConnections();
+
+/* ============================================================
+   Interaction: hover, drag decks vertically, keyboard nudge
+============================================================ */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const tip = document.getElementById('tip');
+let hovered = -1, dragging = -1, grabOffset = 0, connDirty = false;
+const dragPlane = new THREE.Plane();
+
+function setPointer(e) {
+  pointer.x = (e.clientX / innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+}
+function clampY(i, y) {
+  const lo = i > 0 ? state.ys[i - 1] + GAP : MIN_Y;
+  const hi = i < 2 ? state.ys[i + 1] - GAP : MAX_Y;
+  return Math.min(Math.max(y, lo), hi);
+}
+function showTip(i) {
+  tip.textContent = PLATFORM_DEFS[i].name + ' · ' + state.ys[i].toFixed(1) + ' m';
+  tip.classList.add('show');
+  positionTip(i);
+}
+function positionTip(i) {
+  const def = PLATFORM_DEFS[i];
+  const dirH = camera.position.clone().setY(0).normalize();
+  const v = dirH.multiplyScalar(def.radius + 0.5);
+  v.y = state.ys[i] + 0.6;
+  v.project(camera);
+  tip.style.left = ((v.x * 0.5 + 0.5) * innerWidth) + 'px';
+  tip.style.top = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
+}
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(hitMeshes, false);
+  if (!hits.length) return;
+  dragging = hits[0].object.userData.idx;
+  controls.enabled = false;
+  renderer.domElement.setPointerCapture(e.pointerId);
+  const n = camera.getWorldDirection(new THREE.Vector3());
+  n.y = 0;
+  if (n.lengthSq() < 1e-4) n.set(0, 0, 1);
+  n.normalize();
+  dragPlane.setFromNormalAndCoplanarPoint(n, new THREE.Vector3(0, state.ys[dragging], 0));
+  const hit = new THREE.Vector3();
+  raycaster.ray.intersectPlane(dragPlane, hit);
+  grabOffset = state.ys[dragging] - hit.y;
+  renderer.domElement.style.cursor = 'grabbing';
+  showTip(dragging);
+});
+
+window.addEventListener('pointermove', e => {
+  setPointer(e);
+  if (dragging >= 0) {
+    raycaster.setFromCamera(pointer, camera);
+    const hit = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(dragPlane, hit)) {
+      const ny = clampY(dragging, hit.y + grabOffset);
+      if (Math.abs(ny - state.ys[dragging]) > 1e-4) {
+        state.ys[dragging] = ny;
+        platforms[dragging].group.position.y = ny;
+        connDirty = true;
+        tip.textContent = PLATFORM_DEFS[dragging].name + ' · ' + ny.toFixed(1) + ' m';
+      }
+    }
+    return;
+  }
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(hitMeshes, false);
+  hovered = hits.length ? hits[0].object.userData.idx : -1;
+  renderer.domElement.style.cursor = hovered >= 0 ? 'ns-resize' : 'grab';
+});
+
+function endDrag() {
+  if (dragging < 0) return;
+  dragging = -1;
+  controls.enabled = true;
+  tip.classList.remove('show');
+  renderer.domElement.style.cursor = 'grab';
+  persist('Arrangement saved');
+}
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+
+window.addEventListener('keydown', e => {
+  if (hovered < 0 || dragging >= 0) return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault();
+  const d = e.key === 'ArrowUp' ? 0.1 : -0.1;
+  const ny = clampY(hovered, state.ys[hovered] + d);
+  if (Math.abs(ny - state.ys[hovered]) > 1e-4) {
+    state.ys[hovered] = ny;
+    platforms[hovered].group.position.y = ny;
+    connDirty = true;
+    showTip(hovered);
+    persistSoon();
+  }
+});
+
+/* ============================================================
+   UI wiring
+============================================================ */
+function refreshToggles() {
+  document.querySelectorAll('[data-conn]').forEach(btn => {
+    const key = btn.dataset.conn;
+    const on = !!state.conn[key];
+    btn.setAttribute('aria-pressed', String(on));
+    btn.querySelector('.conn-state').textContent = on ? 'On' : 'Off';
+  });
+}
+document.querySelectorAll('[data-conn]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.conn;
+    state.conn[key] = !state.conn[key];
+    if (key[0] === 'l') buildRailing(parseInt(key[2], 10)); // ladder needs a railing gap on the upper deck
+    updateConnections();
+    refreshToggles();
+    persist('Arrangement saved');
+  });
+});
+document.getElementById('resetView').addEventListener('click', () => {
+  camera.position.fromArray(CAM_DEFAULT.p);
+  controls.target.fromArray(CAM_DEFAULT.t);
+  controls.update();
+  persist(false);
+  flashPill('View reset');
+});
+document.getElementById('resetTree').addEventListener('click', () => {
+  state.ys = PLATFORM_DEFS.map(d => d.def);
+  state.conn = Object.assign({}, DEFAULT_CONN);
+  applyPlatformPositions();
+  for (let i = 0; i < 3; i++) buildRailing(i);
+  updateConnections();
+  refreshToggles();
+  persist('Treehouse restored to default');
+});
+refreshToggles();
+
+/* ============================================================
+   Animation loop
+============================================================ */
+const clock = new THREE.Clock();
+let firstFrame = true;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  controls.update();
+  if (connDirty) { connDirty = false; updateConnections(); }
+
+  for (const c of clouds) {
+    c.position.x += c.userData.speed * dt;
+    if (c.position.x > 80) c.position.x = -80;
+  }
+
+  const attr = fireflies.pts.geometry.attributes.position;
+  for (let i = 0; i < fireflies.base.length; i++) {
+    const b = fireflies.base[i], ph = fireflies.phase[i];
+    attr.setXYZ(i,
+      b[0] + Math.sin(t * 0.5 + ph) * 0.6,
+      b[1] + Math.sin(t * 0.7 + ph * 1.3) * 0.45,
+      b[2] + Math.cos(t * 0.45 + ph) * 0.6);
+  }
+  attr.needsUpdate = true;
+  fireflies.pts.material.opacity = 0.55 + 0.3 * Math.sin(t * 2.2);
+
+  swing.pivot.quaternion.setFromAxisAngle(swing.axis, Math.sin(t * 0.85) * 0.08);
+  canopy.rotation.z = Math.sin(t * 0.4) * 0.008;
+  canopy.rotation.x = Math.cos(t * 0.33) * 0.006;
+
+  platforms.forEach((p, i) => {
+    const active = (i === hovered || i === dragging);
+    let target = active ? 0.65 : 0;
+    if (i === dragging) target = 0.55 + 0.3 * Math.sin(t * 8);
+    p.ring.material.opacity += (target - p.ring.material.opacity) * Math.min(1, dt * 10);
+    p.ring.visible = p.ring.material.opacity > 0.02;
+  });
+
+  if (dragging >= 0) positionTip(dragging);
+
+  renderer.render(scene, camera);
+
+  if (firstFrame) {
+    firstFrame = false;
+    document.getElementById('loader').classList.add('hide');
+    if (saved) flashPill('Welcome back — your treehouse is just as you left it', true);
+  }
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
