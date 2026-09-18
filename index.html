@@ -178,14 +178,21 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
    Constants, state, persistence
 ============================================================ */
 const UP = new THREE.Vector3(0, 1, 0);
-const MIN_Y = 1.6, MAX_Y = 11.0, GAP = 2.0;
 const STORE_KEY = 'old-oak-treehouse-v1';
+/* The three terraces, in the designer's arrangement: each hangs off its own side of the trunk
+   rather than ringing it, and each travels within its own band of heights, so no two can ever meet
+   at the same level. The bearings, the bands, the deck size and the 0.30 m the deck is pulled back
+   toward the trunk are all his. */
+const DECK_R = 3.7;                 // the terrace centre's distance from the trunk axis
+const DECK_DIA = 4.76;              // the base the package ships, at the size he fits it to
+const DECK_INSET = 0.30;
+const DECK_Z = DECK_R - DECK_INSET; // the terrace centre, in the deck's own frame
 const PLATFORM_DEFS = [
-  { name: 'Hearth Deck',  radius: 2.6, angle: 0.5, def: 2.6 },
-  { name: 'Canopy Deck',  radius: 2.3, angle: 2.2, def: 6.2 },
-  { name: "Crow's Nest",  radius: 2.0, angle: 4.4, def: 9.6 },
+  { name: 'The Hearth',        angle: -0.96, def: 5.10,  lo: 3.8,  hi: 5.1,  radius: DECK_DIA / 2 },
+  { name: 'Botanical Room',    angle:  0.96, def: 8.40,  lo: 7.1,  hi: 8.4,  radius: DECK_DIA / 2 },
+  { name: 'Cloud Observatory', angle:  2.50, def: 11.74, lo: 11.0, hi: 12.3, radius: DECK_DIA / 2 },
 ];
-const LADDER_ANGLE = { l01: 5.6, l12: 1.5 };
+const MIN_Y = PLATFORM_DEFS[0].lo, MAX_Y = PLATFORM_DEFS[2].hi;
 const DEFAULT_CONN = { b01: true, l01: false, b12: false, l12: true };
 /* The opening view was framed for a 14 m pole; the designer's oak is twice that, so it steps back
    far enough to hold the whole tree — roots, all three decks and the crown. */
@@ -206,11 +213,9 @@ const state = {
   conn: Object.assign({}, DEFAULT_CONN, saved && saved.conn ? saved.conn : {}),
   cam: (saved && saved.cam && Array.isArray(saved.cam.p) && Array.isArray(saved.cam.t)) ? saved.cam : null,
 };
-// sanitize: clamp + keep deck ordering with minimum gap
-state.ys = state.ys.map(y => Math.min(Math.max(y, MIN_Y), MAX_Y));
-state.ys[0] = Math.min(state.ys[0], MAX_Y - 2 * GAP);
-state.ys[1] = Math.min(Math.max(state.ys[1], state.ys[0] + GAP), MAX_Y - GAP);
-state.ys[2] = Math.min(Math.max(state.ys[2], state.ys[1] + GAP), MAX_Y);
+/* Each terrace travels inside its own band, so a restored arrangement can never stack two of
+   them at one height however it was saved. */
+state.ys = state.ys.map((y, i) => Math.min(Math.max(y, PLATFORM_DEFS[i].lo), PLATFORM_DEFS[i].hi));
 for (const k of Object.keys(DEFAULT_CONN)) state.conn[k] = !!state.conn[k];
 
 const pill = document.getElementById('pill');
@@ -382,6 +387,7 @@ const MAT = {
   ],
   woodDark: new THREE.MeshStandardMaterial({ color: 0x6e4a2f, roughness: 0.9 }),
   rope: new THREE.MeshStandardMaterial({ color: 0xb59a6b, roughness: 1 }),
+  collar: new THREE.MeshStandardMaterial({ color: 0xc79a3f, roughness: 0.45, metalness: 0.75 }),
   rock: new THREE.MeshStandardMaterial({ color: 0x8f8f86, roughness: 1, flatShading: true }),
   leaf: [0x4f7d3a, 0x5d9042, 0x6fa24e, 0x587f36].map(c =>
     new THREE.MeshStandardMaterial({ color: c, roughness: 1, flatShading: true })),
@@ -473,67 +479,9 @@ const OAK_SCALE = 22.499395178125777;
 const OAK_OFFSET = { x: 0.0009558465429073065, z: 0.005172165772511756 };
 let oakTree = null;
 
-for (let k = 0; k < 6; k++) { // roots
-  const a = k / 6 * TAU + 0.35;
-  const out = new THREE.Vector3(Math.cos(a), -0.5, Math.sin(a)).normalize();
-  const root = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.24, 2.0, 8), MAT.bark);
-  root.position.copy(polar(a, 1.0, 0.2));
-  root.quaternion.setFromUnitVectors(UP, out);
-  root.castShadow = true;
-  scene.add(root);
-}
-
-// --- swing branch + swing ---
-const swing = { pivot: null, axis: null };
-{
-  const a = 3.6;
-  const base = polar(a, 0.2, 5.55);
-  const dir = new THREE.Vector3(Math.cos(a), 0.45, Math.sin(a)).normalize();
-  const tip = base.clone().addScaledVector(dir, 2.6);
-  const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.15, 2.6, 10), MAT.bark);
-  branch.position.copy(base).addScaledVector(dir, 1.3);
-  branch.quaternion.setFromUnitVectors(UP, dir);
-  branch.castShadow = true;
-  scene.add(branch);
-
-  const pivot = new THREE.Group();
-  pivot.position.copy(tip);
-  const axis = new THREE.Vector3(Math.cos(a), 0, Math.sin(a)).normalize();
-  const ropeLen = 5.3;
-  for (const s of [-0.24, 0.24]) {
-    const off = axis.clone().multiplyScalar(s);
-    pivot.add(cylBetween(off, off.clone().add(new THREE.Vector3(0, -ropeLen, 0)), 0.022, MAT.rope, 6));
-  }
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.06, 0.26), MAT.wood[2]);
-  seat.position.y = -ropeLen - 0.02;
-  seat.rotation.y = Math.atan2(axis.x, axis.z) + Math.PI / 2;
-  seat.castShadow = true;
-  pivot.add(seat);
-  scene.add(pivot);
-  swing.pivot = pivot; swing.axis = axis;
-}
-
-// --- spiral steps near the ground ---
-for (let k = 0; k < 8; k++) {
-  const y = 0.42 + k * 0.13;
-  const a = 0.9 + k * 0.52;
-  const step = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.24), MAT.wood[k % 3]);
-  step.position.copy(polar(a, y < 1.2 ? 1.0 : 0.88, y));
-  step.rotation.y = -a + Math.PI / 2;
-  step.castShadow = step.receiveShadow = true;
-  scene.add(step);
-}
-
-// --- carved sign ---
-{
-  const a = 1.05;
-  const sign = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.42, 0.05), new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.9 }));
-  sign.position.copy(polar(a, 0.92, 1.62));
-  sign.lookAt(polar(a, 3, 1.62));
-  sign.castShadow = true;
-  scene.add(sign);
-}
-
+/* The roots, the swing branch, the spiral steps and the carved sign were all cut for a 0.8 m pole
+   and now sit inside the oak's own root flare, which is 2.6 m across at the ground. The tree brings
+   its own roots and branches, so they go. */
 
 
 // --- bushes, rocks, tufts, mushrooms ---
@@ -627,131 +575,251 @@ const fireflies = { pts: null, base: [], phase: [] };
 const platforms = [];
 const hitMeshes = [];
 
+/* The bark is not a cylinder — it swells into the root flare and tapers as it climbs — so the trunk
+   is measured once, into a profile of radius and centre against height, and read from there at
+   every frame a terrace moves. */
+const TRUNK_PROFILE = { step: 0.25, lo: 0, hi: 14, rows: [] };
+function buildTrunkProfile() {
+  const rows = [];
+  const v = new THREE.Vector3();
+  const buckets = new Map();
+  trunk.updateMatrixWorld(true);
+  trunk.traverse(o => {
+    if (!o.isMesh || /leaf|foliage|crown/i.test(o.name || '')) return;
+    const p = o.geometry.attributes.position;
+    for (let i = 0; i < p.count; i += 2) {
+      v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
+      if (v.y < TRUNK_PROFILE.lo || v.y > TRUNK_PROFILE.hi) continue;
+      const k = Math.round((v.y - TRUNK_PROFILE.lo) / TRUNK_PROFILE.step);
+      let b = buckets.get(k);
+      if (!b) buckets.set(k, b = []);
+      b.push(v.x, v.z);
+    }
+  });
+  /* The oak forks above about eleven metres, and a branch swinging away is not the trunk's girth.
+     Each slice is measured twice: once to find where the wood is centred, then again over only the
+     points close to that centre, so the reading stays on the central stem. */
+  const slice = (pts, cx, cz, reach) => {
+    const xs = [], zs = [];
+    for (let i = 0; i < pts.length; i += 2) {
+      if (Math.hypot(pts[i] - cx, pts[i + 1] - cz) > reach) continue;
+      xs.push(pts[i]); zs.push(pts[i + 1]);
+    }
+    if (xs.length < 12) return null;
+    xs.sort((a, b) => a - b); zs.sort((a, b) => a - b);
+    const lo = Math.floor(xs.length * 0.02), hi = Math.floor(xs.length * 0.98);
+    return { x: (xs[lo] + xs[hi]) / 2, z: (zs[lo] + zs[hi]) / 2,
+      r: ((xs[hi] - xs[lo]) + (zs[hi] - zs[lo])) / 4, n: xs.length };
+  };
+  const last = () => rows.length ? rows[rows.length - 1] : { r: 0.9, x: 0, z: 0 };
+  for (let k = 0; k <= Math.round((TRUNK_PROFILE.hi - TRUNK_PROFILE.lo) / TRUNK_PROFILE.step); k++) {
+    const pts = buckets.get(k) || [];
+    const y = TRUNK_PROFILE.lo + k * TRUNK_PROFILE.step;
+    const prev = last();
+    let s = slice(pts, prev.x, prev.z, Math.max(1.6, prev.r * 2.2));
+    if (s) s = slice(pts, s.x, s.z, Math.max(1.4, s.r * 1.6)) || s;
+    rows.push(s ? { y, x: s.x, z: s.z, r: s.r } : { y, x: prev.x, z: prev.z, r: prev.r });
+  }
+  TRUNK_PROFILE.rows = rows;
+}
+
+function trunkAt(y) {
+  const rows = TRUNK_PROFILE.rows;
+  if (!rows.length) return { y, r: 0.8, x: 0, z: 0 };
+  const f = (y - TRUNK_PROFILE.lo) / TRUNK_PROFILE.step;
+  const a = rows[THREE.MathUtils.clamp(Math.floor(f), 0, rows.length - 1)];
+  const b = rows[THREE.MathUtils.clamp(Math.ceil(f), 0, rows.length - 1)];
+  const t = THREE.MathUtils.clamp(f - Math.floor(f), 0, 1);
+  return { y, r: a.r + (b.r - a.r) * t, x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
+}
+
+/* The terrace base the package ships, scaled to the designer's diameter with its top surface at
+   deck level. The material comes with the model; it is never rebuilt. */
+let terraceBaseAsset = null;
+function terraceBase() {
+  const src = terraceBaseAsset;
+  const holder = new THREE.Group();
+  if (!src) return holder;
+  const o = src.clone(true);
+  o.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(o);
+  const size = bb.getSize(new THREE.Vector3()), c = bb.getCenter(new THREE.Vector3());
+  const s = DECK_DIA / Math.max(size.x, size.z);
+  o.scale.multiplyScalar(s);   // the model carries its own node scale, so multiply rather than replace
+  o.position.set(-c.x * s, 0.10 - bb.max.y * s, -c.z * s);
+  o.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+  holder.add(o);
+  holder.name = 'terrace base';
+  return holder;
+}
+
+const WALK_BOARDS = 12;
+const DECK_CLEAR = 0.45;          // the air the designer leaves between bark and terrace floor
+
+/* How far out a terrace stands. The designer's 3.4 m holds wherever the trunk is slim enough; where
+   the bark is thicker the terrace steps out so the join never closes up. */
+function deckOffset(i) {
+  const sec = trunkAt(state.ys[i]);
+  return Math.max(DECK_Z, sec.r + PLATFORM_DEFS[i].radius + DECK_CLEAR);
+}
 function buildPlatform(i) {
   const def = PLATFORM_DEFS[i];
   const R = def.radius;
   const g = new THREE.Group();
+  g.name = def.name;
+  g.rotation.y = Math.PI / 2 - def.angle;     // local +Z runs out along this terrace's bearing
 
-  const N = 22; // radial deck planks
-  for (let k = 0; k < N; k++) {
-    const a = k / N * TAU;
-    const len = R - 0.4;
-    const p = new THREE.Mesh(new THREE.BoxGeometry(len, 0.09, (TAU * R / N) * 0.94), MAT.wood[k % 3]);
-    const rm = 0.4 + len / 2;
-    p.position.set(Math.cos(a) * rm, 0, Math.sin(a) * rm);
-    p.rotation.y = -a;
-    p.castShadow = p.receiveShadow = true;
-    g.add(p);
-  }
+  const base = terraceBase();
+  g.add(base);
 
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(R - 0.02, 0.06, 10, 56), MAT.woodDark);
-  rim.rotation.x = Math.PI / 2;
-  rim.castShadow = true;
-  g.add(rim);
-
-  for (let k = 0; k < 3; k++) { // under-deck beams
-    const b = new THREE.Mesh(new THREE.BoxGeometry(R * 2 - 0.3, 0.1, 0.14), MAT.woodDark);
-    b.position.y = -0.09;
-    b.rotation.y = k * Math.PI / 3;
-    b.castShadow = true;
-    g.add(b);
-  }
-  for (let k = 0; k < 4; k++) { // diagonal struts into trunk
-    const a = def.angle + Math.PI / 4 + k * Math.PI / 2;
-    g.add(cylBetween(polar(a, 0.15, -1.15), polar(a, R * 0.75, -0.12), 0.05, MAT.woodDark));
-  }
-
-  // dock (landing for bridges)
-  const dock = new THREE.Group();
-  dock.rotation.y = Math.atan2(Math.cos(def.angle), Math.sin(def.angle));
-  const dz0 = R - 0.35, dz1 = R + 0.95;
-  for (let k = 0; k < 4; k++) {
-    const pl = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, dz1 - dz0), MAT.wood[(k + 1) % 3]);
-    pl.position.set(-0.36 + k * 0.24, 0.005, (dz0 + dz1) / 2);
+  /* the walkway out to it: separate boards, so the deck never reads as one unbroken slab */
+  const walk = new THREE.Group();
+  const boards = [];
+  for (let k = 0; k < WALK_BOARDS; k++) {
+    const pl = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.07, 0.15), MAT.wood[k % 3]);
     pl.castShadow = pl.receiveShadow = true;
-    dock.add(pl);
+    boards.push(pl); walk.add(pl);
   }
-  const postGeo = new THREE.CylinderGeometry(0.032, 0.04, 0.9, 8);
-  [[-0.44, R + 0.05], [0.44, R + 0.05], [-0.46, R + 0.85], [0.46, R + 0.85]].forEach(([x, z]) => {
-    const p = new THREE.Mesh(postGeo, MAT.woodDark);
-    p.position.set(x, 0.47, z);
-    p.castShadow = true;
-    dock.add(p);
-  });
-  [-0.46, 0.46].forEach(x => {
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), MAT.woodDark);
-    cap.position.set(x, 0.94, R + 0.85);
-    dock.add(cap);
-  });
-  [-0.45, 0.45].forEach(x => {
-    dock.add(tube([
-      new THREE.Vector3(x, 0.84, R + 0.05),
-      new THREE.Vector3(x, 0.74, R + 0.45),
-      new THREE.Vector3(x, 0.86, R + 0.85),
-    ], 0.024, MAT.rope));
-  });
-  dock.add(cylBetween(new THREE.Vector3(0, -1.0, R * 0.2), new THREE.Vector3(0, -0.06, R + 0.6), 0.05, MAT.woodDark));
-  g.add(dock);
+  const stringers = [];
+  for (const x of [-0.6, 0.6]) {
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.12, 1), MAT.woodDark);
+    s.position.set(x, -0.09, 0);
+    s.castShadow = true;
+    stringers.push(s); walk.add(s);
+  }
+  g.add(walk);
 
-  // railing lives in its own group so it can rebuild when ladders toggle
+  /* the collar it lands on: a brass band round the bark, which is where the join reads */
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(1, 0.055, 8, 48), MAT.collar);
+  collar.rotation.x = Math.PI / 2;
+  collar.castShadow = true;
+  g.add(collar);
+
+  const braces = [];
+  for (let k = 0; k < 2; k++) {
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 1, 8), MAT.woodDark);
+    b.castShadow = true;
+    braces.push(b); g.add(b);
+  }
+
   const railGroup = new THREE.Group();
   g.add(railGroup);
 
-  // hover highlight ring
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(R + 0.16, 0.05, 8, 64),
     new THREE.MeshBasicMaterial({ color: 0xffc878, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })
   );
   ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.12;
+  ring.position.y = 0.14;
   ring.visible = false;
   g.add(ring);
 
-  // fat invisible grab cylinder
-  const hit = new THREE.Mesh(new THREE.CylinderGeometry(R + 1.3, R + 1.3, 0.6, 18), MAT.hit);
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.5, R + 0.5, 0.8, 18), MAT.hit);
   hit.position.y = 0.1;
   hit.userData.idx = i;
   g.add(hit);
   hitMeshes.push(hit);
 
   scene.add(g);
-  platforms[i] = { def, group: g, railGroup, ring };
+  platforms[i] = { def, group: g, railGroup, ring, hit, base, walk, boards, stringers, collar, braces };
+  fitTerrace(i);
+}
+
+/* Every time a terrace moves, the walkway is re-cut to land on the bark at that height and the
+   collar is re-sized to the trunk it rings. */
+function fitTerrace(i) {
+  const P = platforms[i];
+  if (!P) return;
+  const sec = trunkAt(state.ys[i]);
+  const off = deckOffset(i);
+  /* the stem leans a little as it climbs; the terrace rides with it rather than with the world axis */
+  P.group.position.set(sec.x, state.ys[i], sec.z);
+  for (const part of [P.base, P.railGroup, P.ring, P.hit]) part.position.z = off;
+  const inner = sec.r + 0.10;
+  const outer = off - P.def.radius + 0.75;
+  const span = Math.max(0.5, outer - inner);
+  P.boards.forEach((pl, k) => {
+    pl.position.set(0, 0.03, inner + span * ((k + 0.5) / P.boards.length));
+    pl.scale.z = Math.min(1.25, span / P.boards.length / 0.15 * 0.82);
+  });
+  for (const s of P.stringers) { s.scale.z = span; s.position.z = inner + span / 2; }
+  P.collar.scale.set(sec.r + 0.09, sec.r + 0.09, 1);
+  /* the trunk's centre wanders a little with height; the collar follows it, in the deck's frame */
+  P.collar.position.set(0, 0.02, 0);
+  P.braces.forEach((b, k) => {
+    const x = k ? 0.78 : -0.78;
+    const a = new THREE.Vector3(x * 0.35, -1.25, inner + 0.15);
+    const bq = new THREE.Vector3(x, -0.22, off - P.def.radius + 1.1);
+    const d = new THREE.Vector3().subVectors(bq, a);
+    b.position.copy(a).addScaledVector(d, 0.5);
+    b.scale.y = d.length();
+    b.quaternion.setFromUnitVectors(UP, d.clone().normalize());
+  });
+}
+
+/* Where one terrace faces another: the rim point on deck i that looks at deck j, which is where a
+   bridge is tied and where a ladder is footed. */
+function deckCentre(i) {
+  const a = PLATFORM_DEFS[i].angle, off = deckOffset(i), sec = trunkAt(state.ys[i]);
+  return new THREE.Vector3(sec.x + Math.cos(a) * off, state.ys[i], sec.z + Math.sin(a) * off);
+}
+function endpoint(i, j, inset = 0.3, lift = 0.04) {
+  const ci = deckCentre(i), cj = deckCentre(j);
+  const d = new THREE.Vector3(cj.x - ci.x, 0, cj.z - ci.z);
+  if (d.lengthSq() < 1e-6) d.set(1, 0, 0);
+  d.normalize();
+  return ci.clone().addScaledVector(d, PLATFORM_DEFS[i].radius - inset).setY(state.ys[i] + lift);
+}
+/* the same direction, as an angle around that terrace's own rim */
+function rimBearing(i, target) {
+  const ci = deckCentre(i);
+  const d = new THREE.Vector3(target.x - ci.x, 0, target.z - ci.z);
+  d.applyAxisAngle(UP, -(Math.PI / 2 - PLATFORM_DEFS[i].angle));
+  return Math.atan2(d.x, d.z);
+}
+function dockTip(i, j) { return endpoint(i, j, 0.28, 0.05); }
+function ladderEnds(i, j) {
+  return [endpoint(i, j, 0.62, 0.02), endpoint(j, i, 0.62, 0.02)];
 }
 
 function buildRailing(i) {
   const P = platforms[i], def = P.def, R = def.radius, g = P.railGroup;
   clearGroup(g);
-  const gaps = [{ a: def.angle, w: 0.62 }];
-  if (i > 0 && state.conn['l' + (i - 1) + i]) gaps.push({ a: LADDER_ANGLE['l' + (i - 1) + i], w: 0.5 });
-  if (i < 2 && state.conn['l' + i + (i + 1)]) gaps.push({ a: LADDER_ANGLE['l' + i + (i + 1)], w: 0.5 });
-  const near = a => gaps.some(gp => Math.abs(dAng(a, gp.a)) < gp.w);
-  const rRail = R - 0.09;
-  const postGeo = new THREE.CylinderGeometry(0.035, 0.045, 0.95, 8);
-  for (let k = 0; k < 20; k++) {
-    const a = k / 20 * TAU;
-    if (near(a)) continue;
-    const p = new THREE.Mesh(postGeo, MAT.woodDark);
-    p.position.set(Math.cos(a) * rRail, 0.5, Math.sin(a) * rRail);
-    p.castShadow = true;
-    g.add(p);
-  }
-  const sorted = gaps.map(gp => ({ a: ((gp.a % TAU) + TAU) % TAU, w: gp.w })).sort((x, y) => x.a - y.a);
-  for (let k = 0; k < sorted.length; k++) {
-    const cur = sorted[k], nxt = sorted[(k + 1) % sorted.length];
-    const start = cur.a + cur.w;
-    let end = nxt.a - nxt.w;
-    if (end <= start) end += TAU;
-    if (end - start < 0.3) continue;
-    for (const h of [0.95, 0.55]) {
-      const pts = [];
-      const seg = Math.max(6, Math.ceil((end - start) / 0.12));
-      for (let s = 0; s <= seg; s++) {
-        const a = start + (end - start) * s / seg;
-        pts.push(new THREE.Vector3(Math.cos(a) * rRail, h, Math.sin(a) * rRail));
-      }
-      g.add(tube(pts, 0.028, MAT.rope));
+  /* openings: the walkway in from the trunk, and any ladder or bridge tied to this terrace */
+  const gaps = [{ a: Math.PI, w: 0.42 }];
+  for (const pr of PAIRS) {
+    const other = pr.i === i ? pr.j : (pr.j === i ? pr.i : -1);
+    if (other < 0) continue;
+    if (state.conn[pr.b] || state.conn[pr.l]) {
+      gaps.push({ a: rimBearing(i, deckCentre(other)), w: 0.34 });
     }
   }
+  const near = a => gaps.some(gp => Math.abs(dAng(a, gp.a)) < gp.w);
+  const rRail = R - 0.14;
+  const postGeo = new THREE.CylinderGeometry(0.035, 0.045, 0.95, 8);
+  const posts = [];
+  for (let k = 0; k < 24; k++) {
+    const a = k / 24 * TAU;
+    if (near(a)) continue;
+    const p = new THREE.Mesh(postGeo, MAT.woodDark);
+    p.position.set(Math.sin(a) * rRail, 0.5, Math.cos(a) * rRail);
+    p.castShadow = true;
+    g.add(p);
+    posts.push(a);
+  }
+  /* the handrail itself, in arcs that stop at every opening */
+  const S = 72;
+  let run = [];
+  const flush = () => {
+    if (run.length > 2) g.add(tube(run.slice(), 0.045, MAT.woodDark));
+    run = [];
+  };
+  for (let k = 0; k <= S; k++) {
+    const a = k / S * TAU;
+    if (near(a)) { flush(); continue; }
+    run.push(new THREE.Vector3(Math.sin(a) * rRail, 0.95, Math.cos(a) * rRail));
+  }
+  flush();
 }
 
 /* ============================================================
@@ -760,17 +828,6 @@ function buildRailing(i) {
 const connGroup = new THREE.Group();
 scene.add(connGroup);
 
-function dockTip(i) {
-  const d = PLATFORM_DEFS[i];
-  return polar(d.angle, d.radius + 0.85, state.ys[i] + 0.05);
-}
-function ladderEnds(i, j) {
-  const a = LADDER_ANGLE['l' + i + j];
-  return [
-    polar(a, PLATFORM_DEFS[i].radius - 0.75, state.ys[i] + 0.04),
-    polar(a, PLATFORM_DEFS[j].radius + 0.16, state.ys[j] + 0.02),
-  ];
-}
 
 function buildBridge(p0, p1) {
   const g = new THREE.Group();
@@ -844,7 +901,7 @@ const PAIRS = [
 function updateConnections() {
   clearGroup(connGroup);
   for (const pr of PAIRS) {
-    if (state.conn[pr.b]) connGroup.add(buildBridge(dockTip(pr.i), dockTip(pr.j)));
+    if (state.conn[pr.b]) connGroup.add(buildBridge(dockTip(pr.i, pr.j), dockTip(pr.j, pr.i)));
     if (state.conn[pr.l]) {
       const [A, B] = ladderEnds(pr.i, pr.j);
       connGroup.add(buildLadder(A, B));
@@ -855,13 +912,13 @@ function updateConnections() {
 /* ============================================================
    Build world pieces that depend on state
 ============================================================ */
-for (let i = 0; i < 3; i++) buildPlatform(i);
+/* The terraces are cut against the trunk itself, so they are built in loadScene() once the tree
+   and the terrace base have arrived. */
 function applyPlatformPositions() {
-  platforms.forEach((p, i) => { p.group.position.y = state.ys[i]; });
+  platforms.forEach((p, i) => {
+    fitTerrace(i);
+  });
 }
-applyPlatformPositions();
-for (let i = 0; i < 3; i++) buildRailing(i);
-updateConnections();
 
 /* ============================================================
    Interaction: hover, drag decks vertically, keyboard nudge
@@ -877,9 +934,8 @@ function setPointer(e) {
   pointer.y = -(e.clientY / innerHeight) * 2 + 1;
 }
 function clampY(i, y) {
-  const lo = i > 0 ? state.ys[i - 1] + GAP : MIN_Y;
-  const hi = i < 2 ? state.ys[i + 1] - GAP : MAX_Y;
-  return Math.min(Math.max(y, lo), hi);
+  const def = PLATFORM_DEFS[i];
+  return Math.min(Math.max(y, def.lo), def.hi);
 }
 function showTip(i) {
   tip.textContent = PLATFORM_DEFS[i].name + ' · ' + state.ys[i].toFixed(1) + ' m';
@@ -887,11 +943,8 @@ function showTip(i) {
   positionTip(i);
 }
 function positionTip(i) {
-  const def = PLATFORM_DEFS[i];
-  const dirH = camera.position.clone().setY(0).normalize();
-  const v = dirH.multiplyScalar(def.radius + 0.5);
-  v.y = state.ys[i] + 0.6;
-  v.project(camera);
+  const c = deckCentre(i);
+  const v = new THREE.Vector3(c.x, state.ys[i] + 1.1, c.z).project(camera);
   tip.style.left = ((v.x * 0.5 + 0.5) * innerWidth) + 'px';
   tip.style.top = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
 }
@@ -1034,7 +1087,10 @@ function dressOak(root) {
 let assetsReady = false;
 let loadError = null;
 async function loadScene() {
-  const oak = await loadGlb('assets/models/OakTree.glb');
+  const [oak, terrace] = await Promise.all([
+    loadGlb('assets/models/OakTree.glb'),
+    loadGlb('assets/models/base.glb'),
+  ]);
   oak.updateMatrixWorld(true);
   const bb = new THREE.Box3().setFromObject(oak);
   oak.scale.setScalar(OAK_SCALE);
@@ -1043,6 +1099,14 @@ async function loadScene() {
   trunk.add(oak);
   oakTree = oak;
   trunk.updateMatrixWorld(true);
+
+  /* the terraces can only be cut once the trunk they meet is in: they land on the bark itself */
+  terraceBaseAsset = terrace;
+  buildTrunkProfile();
+  for (let i = 0; i < 3; i++) buildPlatform(i);
+  applyPlatformPositions();
+  for (let i = 0; i < 3; i++) buildRailing(i);
+  updateConnections();
   assetsReady = true;
 }
 loadScene().catch(e => {
@@ -1062,6 +1126,7 @@ let frameCount = 0;
 /* What the tests read. Nothing here changes the scene; it only reports on it. */
 window.app = {
   THREE, scene, camera, renderer, controls, trunk, platforms, state, CAM_DEFAULT, PLATFORM_DEFS,
+  clampY, deckCentre, endpoint, trunkAt, deckOffset, applyPlatformPositions, updateConnections, DECK_R, DECK_Z,
   get oak() { return oakTree; },
   get frame() { return frameCount; },
   get assetsReady() { return assetsReady; },
@@ -1132,7 +1197,6 @@ function animate() {
   attr.needsUpdate = true;
   fireflies.pts.material.opacity = 0.55 + 0.3 * Math.sin(t * 2.2);
 
-  swing.pivot.quaternion.setFromAxisAngle(swing.axis, Math.sin(t * 0.85) * 0.08);
 
   platforms.forEach((p, i) => {
     const active = (i === hovered || i === dragging);
