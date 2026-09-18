@@ -171,6 +171,8 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
 /* ============================================================
    Constants, state, persistence
@@ -185,7 +187,9 @@ const PLATFORM_DEFS = [
 ];
 const LADDER_ANGLE = { l01: 5.6, l12: 1.5 };
 const DEFAULT_CONN = { b01: true, l01: false, b12: false, l12: true };
-const CAM_DEFAULT = { p: [11.5, 7.6, 13.5], t: [0, 5.4, 0] };
+/* The opening view was framed for a 14 m pole; the designer's oak is twice that, so it steps back
+   far enough to hold the whole tree — roots, all three decks and the crown. */
+const CAM_DEFAULT = { p: [20, 13, 25], t: [0, 10, 0] };
 const TAU = Math.PI * 2;
 
 function readStore() {
@@ -266,7 +270,7 @@ controls.target.fromArray(state.cam ? state.cam.t : CAM_DEFAULT.t);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.minDistance = 5.5;
-controls.maxDistance = 38;
+controls.maxDistance = 70;
 controls.minPolarAngle = 0.3;
 controls.maxPolarAngle = 1.52;
 controls.enablePan = false;
@@ -456,28 +460,18 @@ for (let i = 0; i < 9; i++) { // soft grass patches
   scene.add(p);
 }
 
-// --- trunk with organic noise + root flare ---
-const trunkGeo = new THREE.CylinderGeometry(0.34, 0.82, 14, 26, 22, false);
-{
-  const pos = trunkGeo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const wy = y + 7;
-    const ang = Math.atan2(z, x);
-    const r = Math.hypot(x, z);
-    if (r < 1e-4) continue;
-    const n = 0.05 * Math.sin(ang * 3.1 + wy * 0.7) + 0.03 * Math.sin(ang * 6.7 - wy * 1.3);
-    const flare = wy < 1.5 ? 1 + (1.5 - wy) * 0.5 : 1;
-    const nr = r * (1 + n) * flare;
-    pos.setX(i, Math.cos(ang) * nr);
-    pos.setZ(i, Math.sin(ang) * nr);
-  }
-  trunkGeo.computeVertexNormals();
-}
-const trunk = new THREE.Mesh(trunkGeo, MAT.bark);
-trunk.position.y = 7;
-trunk.castShadow = trunk.receiveShadow = true;
+/* --- the one tree everything hangs on ---
+   The trunk used to be a noised cylinder with a canopy of icosahedron blobs above it. Both are
+   gone: the designer ships the whole tree as one scanned oak, bark and leaves together, and it
+   arrives as a study model about 1.2 m tall. The scale and the two millimetre offsets below are
+   his own, so the tree stands on the same central axis the decks were laid out around. */
+const trunk = new THREE.Group();
+trunk.name = 'OakTree - main tree';
+trunk.position.y = 0.02;
 scene.add(trunk);
+const OAK_SCALE = 22.499395178125777;
+const OAK_OFFSET = { x: 0.0009558465429073065, z: 0.005172165772511756 };
+let oakTree = null;
 
 for (let k = 0; k < 6; k++) { // roots
   const a = k / 6 * TAU + 0.35;
@@ -540,25 +534,7 @@ for (let k = 0; k < 8; k++) {
   scene.add(sign);
 }
 
-// --- canopy ---
-const canopy = new THREE.Group();
-{
-  const blobs = [];
-  for (let k = 0; k < 8; k++) blobs.push({ a: k * Math.PI / 4 + 0.2, r: 2.6, y: 13.6, s: 1.5 });
-  for (let k = 0; k < 4; k++) blobs.push({ a: k * Math.PI / 2 + 0.6, r: 1.3, y: 14.8, s: 1.45 });
-  blobs.push({ a: 0, r: 0.2, y: 15.9, s: 1.55 });
-  blobs.push({ a: 2, r: 0.3, y: 12.9, s: 1.35 });
-  blobs.push({ a: 4.2, r: 0.9, y: 13.1, s: 1.2 });
-  for (const b of blobs) {
-    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(b.s, 1), MAT.leaf[Math.floor(rnd() * MAT.leaf.length)]);
-    m.position.copy(polar(b.a, b.r, b.y));
-    m.rotation.set(rnd() * TAU, rnd() * TAU, rnd() * TAU);
-    m.scale.setScalar(0.85 + rnd() * 0.35);
-    m.castShadow = true;
-    canopy.add(m);
-  }
-}
-scene.add(canopy);
+
 
 // --- bushes, rocks, tufts, mushrooms ---
 for (let i = 0; i < 6; i++) {
@@ -1028,13 +1004,112 @@ document.getElementById('resetTree').addEventListener('click', () => {
 refreshToggles();
 
 /* ============================================================
+   The designer's assets
+============================================================ */
+const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const loadGlb = async url => (await gltfLoader.loadAsync(url)).scene;
+
+/* His own settings for the oak's two materials: matte, lit from both faces, and the bark's colour
+   map doubled as a bump map. The leaf material's alpha is left exactly as it comes out of the
+   package — rebuilding it is what turns the leaves into black cards. */
+function dressOak(root) {
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    o.receiveShadow = true;
+    for (const m of [].concat(o.material)) {
+      m.metalness = 0;
+      m.roughness = 0.94;
+      m.side = THREE.DoubleSide;
+      m.shadowSide = THREE.DoubleSide;
+      if (!m.normalMap && m.map && !m.bumpMap) {
+        m.bumpMap = m.map;
+        m.bumpScale = 0.035;
+      }
+      m.needsUpdate = true;
+    }
+  });
+}
+
+let assetsReady = false;
+let loadError = null;
+async function loadScene() {
+  const oak = await loadGlb('assets/models/OakTree.glb');
+  oak.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(oak);
+  oak.scale.setScalar(OAK_SCALE);
+  oak.position.set(OAK_OFFSET.x, -bb.min.y * OAK_SCALE, OAK_OFFSET.z);
+  dressOak(oak);
+  trunk.add(oak);
+  oakTree = oak;
+  trunk.updateMatrixWorld(true);
+  assetsReady = true;
+}
+loadScene().catch(e => {
+  loadError = e;
+  assetsReady = true;
+  document.getElementById('loaderText').textContent = 'The tree could not be loaded.';
+  console.error(e);
+});
+
+/* ============================================================
    Animation loop
 ============================================================ */
 const clock = new THREE.Clock();
 let firstFrame = true;
+let frameCount = 0;
+
+/* What the tests read. Nothing here changes the scene; it only reports on it. */
+window.app = {
+  THREE, scene, camera, renderer, controls, trunk, platforms, state, CAM_DEFAULT, PLATFORM_DEFS,
+  get oak() { return oakTree; },
+  get frame() { return frameCount; },
+  get assetsReady() { return assetsReady; },
+  get loadError() { return loadError; },
+  /* Every trunk vertex below the crown, in world space, sampled the way the designer samples his:
+     leaves excluded, so a section reads the wood and not the foliage around it. */
+  trunkSamples(maxY = 13, stride = 2) {
+    const out = [];
+    const v = new THREE.Vector3();
+    trunk.updateMatrixWorld(true);
+    trunk.traverse(o => {
+      if (!o.isMesh || /leaf|foliage|crown/i.test(o.name || '')) return;
+      const p = o.geometry.attributes.position;
+      for (let i = 0; i < p.count; i += stride) {
+        v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
+        if (v.y < maxY) out.push([v.x, v.y, v.z]);
+      }
+    });
+    return out;
+  },
+  /* The trunk's centre and radii at a height, from those samples. */
+  trunkSection(y, band = 0.14) {
+    const q = this.trunkSamples(y + band, 1).filter(v => Math.abs(v[1] - y) < band);
+    if (!q.length) return null;
+    const xs = q.map(v => v[0]).sort((a, b) => a - b), zs = q.map(v => v[2]).sort((a, b) => a - b);
+    const lo = Math.floor(q.length * 0.02), hi = Math.floor(q.length * 0.98);
+    return { x: (xs[lo] + xs[hi]) / 2, z: (zs[lo] + zs[hi]) / 2,
+             rx: (xs[hi] - xs[lo]) / 2, rz: (zs[hi] - zs[lo]) / 2, count: q.length };
+  },
+  meshBoxes(re) {
+    const out = [];
+    scene.updateMatrixWorld(true);
+    scene.traverse(o => {
+      if (!o.isMesh || (re && !re.test(o.name || ''))) return;
+      const b = new THREE.Box3().setFromObject(o);
+      out.push({ name: o.name, min: b.min.toArray(), max: b.max.toArray() });
+    });
+    return out;
+  },
+  project(x, y, z) {
+    const v = new THREE.Vector3(x, y, z).project(camera);
+    return { x: v.x, y: v.y, z: v.z };
+  },
+};
 
 function animate() {
   requestAnimationFrame(animate);
+  frameCount++;
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
 
@@ -1058,8 +1133,6 @@ function animate() {
   fireflies.pts.material.opacity = 0.55 + 0.3 * Math.sin(t * 2.2);
 
   swing.pivot.quaternion.setFromAxisAngle(swing.axis, Math.sin(t * 0.85) * 0.08);
-  canopy.rotation.z = Math.sin(t * 0.4) * 0.008;
-  canopy.rotation.x = Math.cos(t * 0.33) * 0.006;
 
   platforms.forEach((p, i) => {
     const active = (i === hovered || i === dragging);
@@ -1073,7 +1146,7 @@ function animate() {
 
   renderer.render(scene, camera);
 
-  if (firstFrame) {
+  if (firstFrame && assetsReady) {
     firstFrame = false;
     document.getElementById('loader').classList.add('hide');
     if (saved) flashPill('Welcome back — your treehouse is just as you left it', true);
